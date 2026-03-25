@@ -1,0 +1,51 @@
+name: Release — Build Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  rust-binary:
+    name: Compile Server Binary
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dal-server
+          path: target/release/dal
+
+  web-bundle:
+    name: Bundle Web Frontend
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dal-web
+          path: web/.next/standalone

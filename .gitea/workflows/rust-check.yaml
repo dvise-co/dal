@@ -1,0 +1,43 @@
+name: Rust — Test & Lint
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: cargo test --verbose
+
+  lint:
+    name: Clippy Lint
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+  format:
+    name: Format Check
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: cargo fmt --check

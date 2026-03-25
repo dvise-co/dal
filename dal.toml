@@ -1,0 +1,25 @@
+[server]
+# Address to bind to
+host = "0.0.0.0"
+# Port for the API server
+port = 8550
+
+[storage]
+# Directory where yt-dlp saves downloaded files (e.g. Samba share mount)
+download_dir = "/mnt/media/videos"
+# Path to SQLite database file (created automatically)
+database = "/var/lib/dal/dal.db"
+
+[ytdlp]
+# Path to yt-dlp binary
+binary = "yt-dlp"
+# Number of concurrent downloads (increase for faster throughput)
+max_concurrent = 1
+# Extra arguments passed to every yt-dlp invocation
+# Common options:
+#   --merge-output-format mp4    — always output mp4
+#   --format bestvideo+bestaudio — best quality
+#   --cookies-from-browser firefox — use browser cookies for auth
+#   --ratelimit 5M               — limit download speed
+#   --geo-bypass                  — bypass geo restrictions
+extra_args = ["--merge-output-format", "mp4"]
