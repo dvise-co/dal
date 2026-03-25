@@ -21,6 +21,7 @@ pub struct ServerConfig {
 pub struct StorageConfig {
     pub download_dir: String,
     pub database: String,
+    pub segment_by_host: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +56,7 @@ impl Default for StorageConfig {
         Self {
             download_dir: "./downloads".to_string(),
             database: "./dal.db".to_string(),
+            segment_by_host: true,
         }
     }
 }
@@ -90,6 +92,7 @@ mod tests {
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 8550);
         assert_eq!(config.storage.download_dir, "./downloads");
+        assert!(config.storage.segment_by_host);
         assert_eq!(config.ytdlp.max_concurrent, 1);
     }
 
@@ -103,6 +106,7 @@ mod tests {
             [storage]
             download_dir = "/tmp/videos"
             database = "/tmp/dal.db"
+            segment_by_host = false
 
             [ytdlp]
             binary = "/usr/bin/yt-dlp"
@@ -113,6 +117,7 @@ mod tests {
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 9000);
         assert_eq!(config.storage.download_dir, "/tmp/videos");
+        assert!(!config.storage.segment_by_host);
         assert_eq!(config.ytdlp.max_concurrent, 3);
         assert_eq!(config.ytdlp.extra_args, vec!["--format", "best"]);
     }

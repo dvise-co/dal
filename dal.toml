@@ -9,6 +9,9 @@ port = 8550
 download_dir = "/mnt/media/videos"
 # Path to SQLite database file (created automatically)
 database = "/var/lib/dal/dal.db"
+# Organize downloads into subdirectories by source hostname
+# e.g. /mnt/media/videos/youtube.com/Video.mp4
+segment_by_host = true
 
 [ytdlp]
 # Path to yt-dlp binary

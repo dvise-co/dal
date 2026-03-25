@@ -82,7 +82,14 @@ async fn download_item(
     });
 
     let download_dir = &state.config.storage.download_dir;
-    let output_template = format!("{}/%(title)s.%(ext)s", download_dir);
+    let output_template = if state.config.storage.segment_by_host {
+        let host = parse_host(url).unwrap_or_else(|| "unknown".to_string());
+        let host_dir = std::path::Path::new(download_dir).join(&host);
+        let _ = std::fs::create_dir_all(&host_dir);
+        format!("{}/%(title)s.%(ext)s", host_dir.display())
+    } else {
+        format!("{}/%(title)s.%(ext)s", download_dir)
+    };
 
     let mut cmd = tokio::process::Command::new(&state.config.ytdlp.binary);
     cmd.arg("--newline")
@@ -250,7 +257,8 @@ async fn handle_failure(
                 let path = std::path::Path::new(filepath);
                 let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 let incomplete_name = rename::incomplete_filename(&filename);
-                let incomplete_path = std::path::Path::new(download_dir).join(&incomplete_name);
+                let file_dir = path.parent().unwrap_or(std::path::Path::new(download_dir));
+                let incomplete_path = file_dir.join(&incomplete_name);
 
                 if let Ok(()) = std::fs::rename(filepath, &incomplete_path) {
                     let _ = sqlx::query(
@@ -286,6 +294,12 @@ async fn handle_failure(
     });
 
     tracing::error!("Download failed for queue {}", queue_id);
+}
+
+fn parse_host(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
 }
 
 fn parse_progress(line: &str) -> Option<String> {
@@ -341,5 +355,13 @@ mod tests {
             parse_progress("[download] Destination: some file.mp4"),
             None
         );
+    }
+
+    #[test]
+    fn test_parse_host() {
+        assert_eq!(parse_host("https://www.youtube.com/watch?v=abc"), Some("www.youtube.com".to_string()));
+        assert_eq!(parse_host("https://vimeo.com/12345"), Some("vimeo.com".to_string()));
+        assert_eq!(parse_host("https://x.com/user/status/123"), Some("x.com".to_string()));
+        assert_eq!(parse_host("not-a-url"), None);
     }
 }
