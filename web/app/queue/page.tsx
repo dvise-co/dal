@@ -1,7 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { getQueue, addToQueue, cancelQueue, getCategories, QueueEntry, Category } from "@/lib/api";
+import {
+  getQueue,
+  addToQueue,
+  cancelQueue,
+  reorderQueue,
+  getCategories,
+  QueueEntry,
+  Category,
+} from "@/lib/api";
 import { subscribeProgress, ProgressUpdate } from "@/lib/ws";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -22,7 +30,9 @@ export default function QueuePage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [duplicateUrl, setDuplicateUrl] = useState("");
   const [logs, setLogs] = useState<Record<number, string[]>>({});
-  const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -55,42 +65,19 @@ export default function QueuePage() {
         )
       );
 
-      // Append output line to log
       if (update.output) {
         setLogs((prev) => {
           const current = prev[update.queue_id] || [];
           const updated = [...current, update.output!].slice(-MAX_LOG_LINES);
           return { ...prev, [update.queue_id]: updated };
         });
-        // Auto-expand log when download starts
-        setExpandedLogs((prev) => {
-          if (update.status === "downloading" && !prev.has(update.queue_id)) {
-            const next = new Set(prev);
-            next.add(update.queue_id);
-            return next;
-          }
-          return prev;
-        });
       }
 
-      // Refresh full list when a download completes or fails
       if (update.status === "completed" || update.status === "failed") {
         setTimeout(refresh, 500);
       }
     });
   }, [refresh]);
-
-  const toggleLog = (id: number) => {
-    setExpandedLogs((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
 
   const handleSubmit = async (e: React.FormEvent, force: boolean = false) => {
     e.preventDefault();
@@ -106,10 +93,8 @@ export default function QueuePage() {
       const msg = err instanceof Error ? err.message : "Failed to queue URL";
       if (msg.includes("already queued")) {
         setDuplicateUrl(url.trim());
-        setError(msg);
-      } else {
-        setError(msg);
       }
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -136,6 +121,54 @@ export default function QueuePage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to retry");
     }
+  };
+
+  // Drag and drop
+  const handleDragStart = (id: number) => {
+    setDragId(id);
+  };
+
+  const handleDragOver = (e: React.DragEvent, id: number) => {
+    e.preventDefault();
+    if (dragId !== null && dragId !== id) {
+      setDragOverId(id);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverId(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetId: number) => {
+    e.preventDefault();
+    setDragOverId(null);
+
+    if (dragId === null || dragId === targetId) {
+      setDragId(null);
+      return;
+    }
+
+    const newEntries = [...entries];
+    const dragIdx = newEntries.findIndex((e) => e.id === dragId);
+    const targetIdx = newEntries.findIndex((e) => e.id === targetId);
+    if (dragIdx === -1 || targetIdx === -1) return;
+
+    const [moved] = newEntries.splice(dragIdx, 1);
+    newEntries.splice(targetIdx, 0, moved);
+    setEntries(newEntries);
+    setDragId(null);
+
+    const order = newEntries.map((e) => e.id);
+    try {
+      await reorderQueue(order);
+    } catch {
+      await refresh();
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDragId(null);
+    setDragOverId(null);
   };
 
   return (
@@ -187,85 +220,136 @@ export default function QueuePage() {
       )}
 
       {/* Queue List */}
-      <div className="space-y-3">
+      <div className="space-y-1">
         {entries.length === 0 ? (
           <p className="text-muted-foreground text-sm py-8 text-center">
             Queue is empty. Paste a URL above to start a download.
           </p>
         ) : (
-          entries.map((entry) => (
-            <div
-              key={entry.id}
-              className="rounded-lg border border-border bg-zinc-900 p-4 space-y-2"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-mono truncate" title={entry.url}>
-                    {entry.url}
-                  </p>
-                  <div className="flex items-center gap-2 mt-1.5">
+          entries.map((entry) => {
+            const isExpanded = expandedId === entry.id;
+            const isDragging = dragId === entry.id;
+            const isDragOver = dragOverId === entry.id;
+            const canDrag = entry.status === "pending";
+            const logLines = logs[entry.id] || [];
+
+            return (
+              <div
+                key={entry.id}
+                draggable={canDrag}
+                onDragStart={() => handleDragStart(entry.id)}
+                onDragOver={(e) => handleDragOver(e, entry.id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, entry.id)}
+                onDragEnd={handleDragEnd}
+                className={`rounded-lg border bg-zinc-900 transition-all ${
+                  isDragOver
+                    ? "border-accent border-2"
+                    : "border-border"
+                } ${isDragging ? "opacity-40" : ""}`}
+              >
+                {/* Compact row */}
+                <div
+                  className="flex items-center gap-3 px-4 py-3 cursor-pointer"
+                  onClick={() => setExpandedId(isExpanded ? null : entry.id)}
+                >
+                  {/* Drag handle */}
+                  {canDrag ? (
                     <span
-                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[entry.status] || ""}`}
+                      className="text-zinc-600 hover:text-zinc-400 cursor-grab active:cursor-grabbing select-none"
+                      title="Drag to reorder"
                     >
-                      {entry.status}
+                      &#x2807;
                     </span>
-                    {entry.progress && entry.status === "downloading" && (
-                      <span className="text-xs text-muted-foreground">
-                        {entry.progress}
-                      </span>
-                    )}
-                    {entry.error && (
-                      <span className="text-xs text-destructive">{entry.error}</span>
-                    )}
-                    {/* Log toggle */}
-                    {(logs[entry.id]?.length ?? 0) > 0 && (
-                      <button
-                        onClick={() => toggleLog(entry.id)}
-                        className="text-xs text-muted-foreground hover:text-white transition-colors ml-1"
-                      >
-                        {expandedLogs.has(entry.id) ? "Hide" : "Show"} log ({logs[entry.id].length})
-                      </button>
-                    )}
+                  ) : (
+                    <span className="w-3" />
+                  )}
+
+                  {/* Status badge */}
+                  <span
+                    className={`shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[entry.status] || ""}`}
+                  >
+                    {entry.status}
+                  </span>
+
+                  {/* Progress % */}
+                  {entry.status === "downloading" && entry.progress && (
+                    <span className="shrink-0 text-xs font-mono text-accent w-12 text-right">
+                      {entry.progress}
+                    </span>
+                  )}
+
+                  {/* URL */}
+                  <span
+                    className="flex-1 min-w-0 text-sm font-mono truncate text-zinc-300"
+                    title={entry.url}
+                  >
+                    {entry.url}
+                  </span>
+
+                  {/* Expand indicator */}
+                  <span className="text-xs text-zinc-600 shrink-0">
+                    {isExpanded ? "\u25BE" : "\u25B8"}
+                  </span>
+                </div>
+
+                {/* Progress bar (always visible when downloading) */}
+                {entry.status === "downloading" && entry.progress && (
+                  <div className="w-full bg-zinc-800 h-0.5">
+                    <div
+                      className="bg-accent h-0.5 transition-all duration-300"
+                      style={{
+                        width: entry.progress.replace("%", "") + "%",
+                      }}
+                    />
                   </div>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  {entry.status === "pending" && (
-                    <button
-                      onClick={() => handleCancel(entry.id)}
-                      className="rounded-md border border-border px-3 py-1 text-xs hover:bg-zinc-800 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                  {entry.status === "failed" && (
-                    <button
-                      onClick={() => handleRetry(entry)}
-                      className="rounded-md border border-border px-3 py-1 text-xs hover:bg-zinc-800 transition-colors"
-                    >
-                      Retry
-                    </button>
-                  )}
-                </div>
+                )}
+
+                {/* Expanded detail */}
+                {isExpanded && (
+                  <div className="px-4 pb-4 pt-2 space-y-3 border-t border-zinc-800">
+                    <p className="text-xs font-mono text-zinc-400 break-all">
+                      {entry.url}
+                    </p>
+
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>Queued: {entry.created_at}</span>
+                      {entry.error && (
+                        <span className="text-destructive">{entry.error}</span>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      {entry.status === "pending" && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancel(entry.id);
+                          }}
+                          className="rounded-md border border-border px-3 py-1 text-xs hover:bg-zinc-800 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      {entry.status === "failed" && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRetry(entry);
+                          }}
+                          className="rounded-md border border-border px-3 py-1 text-xs hover:bg-zinc-800 transition-colors"
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </div>
+
+                    {logLines.length > 0 && <LogPanel lines={logLines} />}
+                  </div>
+                )}
               </div>
-
-              {/* Progress bar */}
-              {entry.status === "downloading" && entry.progress && (
-                <div className="w-full bg-zinc-800 rounded-full h-1.5">
-                  <div
-                    className="bg-accent h-1.5 rounded-full transition-all duration-300"
-                    style={{
-                      width: entry.progress.replace("%", "") + "%",
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Console output log */}
-              {expandedLogs.has(entry.id) && logs[entry.id]?.length > 0 && (
-                <LogPanel lines={logs[entry.id]} />
-              )}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -276,7 +360,6 @@ function LogPanel({ lines }: { lines: string[] }) {
   const ref = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
-    // Auto-scroll to bottom on new lines
     if (ref.current) {
       ref.current.scrollTop = ref.current.scrollHeight;
     }
@@ -285,7 +368,7 @@ function LogPanel({ lines }: { lines: string[] }) {
   return (
     <pre
       ref={ref}
-      className="mt-2 max-h-48 overflow-y-auto rounded-md bg-zinc-950 border border-zinc-800 p-3 text-xs font-mono text-zinc-400 leading-relaxed"
+      className="max-h-48 overflow-y-auto rounded-md bg-zinc-950 border border-zinc-800 p-3 text-xs font-mono text-zinc-400 leading-relaxed"
     >
       {lines.map((line, i) => (
         <div key={i}>{line}</div>

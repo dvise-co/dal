@@ -24,7 +24,7 @@ pub fn spawn_worker(
         loop {
             // Poll for pending items
             let pending: Vec<(i64, String, Option<i64>)> = match sqlx::query_as(
-                "SELECT id, url, category_id FROM queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
+                "SELECT id, url, category_id FROM queue WHERE status = 'pending' ORDER BY position ASC, created_at ASC LIMIT 5"
             )
             .fetch_all(&state.db)
             .await

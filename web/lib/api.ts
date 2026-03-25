@@ -5,6 +5,7 @@ export interface QueueEntry {
   progress: string | null;
   error: string | null;
   category_id: number | null;
+  position: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -68,6 +69,13 @@ export async function addToQueue(
 
 export async function cancelQueue(id: number): Promise<void> {
   return fetchJSON(`/queue/${id}`, { method: "DELETE" });
+}
+
+export async function reorderQueue(order: number[]): Promise<void> {
+  return fetchJSON("/queue/reorder", {
+    method: "PUT",
+    body: JSON.stringify({ order }),
+  });
 }
 
 export async function getFiles(params?: {
