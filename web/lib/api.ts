@@ -4,6 +4,7 @@ export interface QueueEntry {
   status: "pending" | "downloading" | "completed" | "failed";
   progress: string | null;
   error: string | null;
+  category_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -18,8 +19,15 @@ export interface FileEntry {
   size_bytes: number | null;
   duration: string | null;
   thumbnail: string | null;
+  category_id: number | null;
   created_at: string;
   rated_at: string | null;
+}
+
+export interface Category {
+  id: number;
+  name: string;
+  created_at: string;
 }
 
 const API_BASE = "/api";
@@ -47,11 +55,14 @@ export async function getQueue(status?: string): Promise<QueueEntry[]> {
 
 export async function addToQueue(
   url: string,
-  force: boolean = false
+  force: boolean = false,
+  category?: string
 ): Promise<QueueEntry> {
+  const body: Record<string, unknown> = { url, force };
+  if (category) body.category = category;
   return fetchJSON("/queue", {
     method: "POST",
-    body: JSON.stringify({ url, force }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -62,11 +73,13 @@ export async function cancelQueue(id: number): Promise<void> {
 export async function getFiles(params?: {
   unrated?: boolean;
   incomplete?: boolean;
+  category_id?: number;
   sort?: string;
 }): Promise<FileEntry[]> {
   const searchParams = new URLSearchParams();
   if (params?.unrated) searchParams.set("unrated", "true");
   if (params?.incomplete) searchParams.set("incomplete", "true");
+  if (params?.category_id) searchParams.set("category_id", String(params.category_id));
   if (params?.sort) searchParams.set("sort", params.sort);
   const qs = searchParams.toString();
   return fetchJSON(`/files${qs ? `?${qs}` : ""}`);
@@ -84,6 +97,22 @@ export async function rateFile(
 
 export async function deleteFile(id: number): Promise<void> {
   return fetchJSON(`/files/${id}`, { method: "DELETE" });
+}
+
+// Categories
+export async function getCategories(): Promise<Category[]> {
+  return fetchJSON("/categories");
+}
+
+export async function createCategory(name: string): Promise<Category> {
+  return fetchJSON("/categories", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteCategory(id: number): Promise<void> {
+  return fetchJSON(`/categories/${id}`, { method: "DELETE" });
 }
 
 export function formatBytes(bytes: number | null): string {

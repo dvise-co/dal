@@ -23,8 +23,8 @@ pub fn spawn_worker(
     tokio::spawn(async move {
         loop {
             // Poll for pending items
-            let pending: Vec<(i64, String)> = match sqlx::query_as(
-                "SELECT id, url FROM queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
+            let pending: Vec<(i64, String, Option<i64>)> = match sqlx::query_as(
+                "SELECT id, url, category_id FROM queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
             )
             .fetch_all(&state.db)
             .await
@@ -42,13 +42,13 @@ pub fn spawn_worker(
                 continue;
             }
 
-            for (id, url) in pending {
+            for (id, url, category_id) in pending {
                 let permit = semaphore.clone().acquire_owned().await.unwrap();
                 let state = state.clone();
                 let tx = progress_tx.clone();
 
                 tokio::spawn(async move {
-                    download_item(&state, id, &url, &tx).await;
+                    download_item(&state, id, &url, category_id, &tx).await;
                     drop(permit);
                 });
             }
@@ -62,6 +62,7 @@ async fn download_item(
     state: &AppState,
     queue_id: i64,
     url: &str,
+    category_id: Option<i64>,
     tx: &broadcast::Sender<ProgressUpdate>,
 ) {
     // Mark as downloading
@@ -82,14 +83,30 @@ async fn download_item(
     });
 
     let download_dir = &state.config.storage.download_dir;
-    let output_template = if state.config.storage.segment_by_host {
-        let host = parse_host(url).unwrap_or_else(|| "unknown".to_string());
-        let host_dir = std::path::Path::new(download_dir).join(&host);
-        let _ = std::fs::create_dir_all(&host_dir);
-        format!("{}/%(title)s.%(ext)s", host_dir.display())
+
+    // Resolve category name if set
+    let category_name: Option<String> = if let Some(cat_id) = category_id {
+        sqlx::query_scalar("SELECT name FROM categories WHERE id = ?")
+            .bind(cat_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
     } else {
-        format!("{}/%(title)s.%(ext)s", download_dir)
+        None
     };
+
+    // Build output path: [download_dir]/[category]/[host]/%(title)s.%(ext)s
+    let mut base = std::path::PathBuf::from(download_dir);
+    if let Some(ref cat) = category_name {
+        base.push(cat);
+    }
+    if state.config.storage.segment_by_host {
+        let host = parse_host(url).unwrap_or_else(|| "unknown".to_string());
+        base.push(&host);
+    }
+    let _ = std::fs::create_dir_all(&base);
+    let output_template = format!("{}/%(title)s.%(ext)s", base.display());
 
     let mut cmd = tokio::process::Command::new(&state.config.ytdlp.binary);
     cmd.arg("--newline")
@@ -196,10 +213,10 @@ async fn download_item(
 
     match status {
         Ok(exit) if exit.success() => {
-            handle_success(state, queue_id, final_filepath, tx).await;
+            handle_success(state, queue_id, category_id, final_filepath, tx).await;
         }
         Ok(_) | Err(_) => {
-            handle_failure(state, queue_id, final_filepath, download_dir, tx).await;
+            handle_failure(state, queue_id, category_id, final_filepath, download_dir, tx).await;
         }
     }
 }
@@ -207,6 +224,7 @@ async fn download_item(
 async fn handle_success(
     state: &AppState,
     queue_id: i64,
+    category_id: Option<i64>,
     final_filepath: Option<String>,
     tx: &broadcast::Sender<ProgressUpdate>,
 ) {
@@ -216,13 +234,14 @@ async fn handle_success(
         let size_bytes = std::fs::metadata(filepath).map(|m| m.len() as i64).ok();
 
         let _ = sqlx::query(
-            "INSERT INTO files (queue_id, filename, original, path, size_bytes) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
         )
         .bind(queue_id)
         .bind(&filename)
         .bind(&filename)
         .bind(filepath)
         .bind(size_bytes)
+        .bind(category_id)
         .execute(&state.db)
         .await;
     }
@@ -245,6 +264,7 @@ async fn handle_success(
 async fn handle_failure(
     state: &AppState,
     queue_id: i64,
+    category_id: Option<i64>,
     final_filepath: Option<String>,
     download_dir: &str,
     tx: &broadcast::Sender<ProgressUpdate>,
@@ -262,13 +282,14 @@ async fn handle_failure(
 
                 if let Ok(()) = std::fs::rename(filepath, &incomplete_path) {
                     let _ = sqlx::query(
-                        "INSERT INTO files (queue_id, filename, original, path, size_bytes) VALUES (?, ?, ?, ?, ?)"
+                        "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
                     )
                     .bind(queue_id)
                     .bind(&incomplete_name)
                     .bind(&filename)
                     .bind(incomplete_path.to_string_lossy().as_ref())
                     .bind(meta.len() as i64)
+                    .bind(category_id)
                     .execute(&state.db)
                     .await;
 

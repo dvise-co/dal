@@ -27,6 +27,7 @@ struct FileEntry {
     size_bytes: Option<i64>,
     duration: Option<String>,
     thumbnail: Option<String>,
+    category_id: Option<i64>,
     created_at: Option<String>,
     rated_at: Option<String>,
 }
@@ -35,6 +36,7 @@ struct FileEntry {
 struct ListParams {
     unrated: Option<bool>,
     incomplete: Option<bool>,
+    category_id: Option<i64>,
     sort: Option<String>,
 }
 
@@ -53,15 +55,18 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<FileEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, created_at, rated_at FROM files"
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files"
     );
-    let mut conditions = Vec::new();
+    let mut conditions: Vec<String> = Vec::new();
 
     if params.unrated == Some(true) {
-        conditions.push("rating IS NULL");
+        conditions.push("rating IS NULL".to_string());
     }
     if params.incomplete == Some(true) {
-        conditions.push("filename LIKE 'INCOMPLETE - %'");
+        conditions.push("filename LIKE 'INCOMPLETE - %'".to_string());
+    }
+    if let Some(cat_id) = params.category_id {
+        conditions.push(format!("category_id = {}", cat_id));
     }
 
     if !conditions.is_empty() {
@@ -100,7 +105,7 @@ async fn rate(
 
     // Get current file record
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, created_at, rated_at FROM files WHERE id = ?"
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -129,7 +134,7 @@ async fn rate(
 
     // Update database
     let updated: FileEntry = sqlx::query_as(
-        "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, created_at, rated_at"
+        "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at"
     )
     .bind(&new_filename)
     .bind(&new_path)
@@ -151,7 +156,7 @@ async fn remove(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // Get file record
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, created_at, rated_at FROM files WHERE id = ?"
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)

@@ -4,6 +4,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use crate::AppState;
 
+pub mod categories;
 pub mod files;
 pub mod queue;
 
@@ -11,6 +12,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(queue::router())
         .merge(files::router())
+        .merge(categories::router())
         .route("/api/health", axum::routing::get(health))
         .route("/api/ws", axum::routing::get(ws_handler))
 }

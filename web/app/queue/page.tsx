@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { getQueue, addToQueue, cancelQueue, QueueEntry } from "@/lib/api";
+import { getQueue, addToQueue, cancelQueue, getCategories, QueueEntry, Category } from "@/lib/api";
 import { subscribeProgress, ProgressUpdate } from "@/lib/ws";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -18,6 +18,8 @@ export default function QueuePage() {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [category, setCategory] = useState("");
+  const [categories, setCategories] = useState<Category[]>([]);
   const [duplicateUrl, setDuplicateUrl] = useState("");
   const [logs, setLogs] = useState<Record<number, string[]>>({});
   const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
@@ -33,6 +35,7 @@ export default function QueuePage() {
 
   useEffect(() => {
     refresh();
+    getCategories().then(setCategories).catch(() => {});
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [refresh]);
@@ -96,7 +99,7 @@ export default function QueuePage() {
     setDuplicateUrl("");
     setLoading(true);
     try {
-      await addToQueue(url.trim(), force);
+      await addToQueue(url.trim(), force, category || undefined);
       setUrl("");
       await refresh();
     } catch (err) {
@@ -146,8 +149,20 @@ export default function QueuePage() {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="Paste a URL to download..."
-          className="flex-1 rounded-lg bg-zinc-900 border border-border px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+          className="flex-1 min-w-0 rounded-lg bg-zinc-900 border border-border px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent"
         />
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="rounded-lg bg-zinc-900 border border-border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+        >
+          <option value="">Uncategorized</option>
+          {categories.map((cat) => (
+            <option key={cat.id} value={cat.name}>
+              {cat.name}
+            </option>
+          ))}
+        </select>
         <button
           type="submit"
           disabled={loading || !url.trim()}

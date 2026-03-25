@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { getFiles, rateFile, deleteFile, FileEntry, formatBytes } from "@/lib/api";
+import { getFiles, rateFile, deleteFile, getCategories, FileEntry, Category, formatBytes } from "@/lib/api";
 
 type SortField = "date" | "rating" | "name";
 type FilterMode = "all" | "unrated" | "incomplete";
@@ -10,6 +10,8 @@ export default function ReviewPage() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [sort, setSort] = useState<SortField>("date");
   const [filter, setFilter] = useState<FilterMode>("all");
+  const [categoryFilter, setCategoryFilter] = useState<number | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [error, setError] = useState("");
   const [ratingInputs, setRatingInputs] = useState<Record<number, string>>({});
 
@@ -18,16 +20,18 @@ export default function ReviewPage() {
       const data = await getFiles({
         unrated: filter === "unrated",
         incomplete: filter === "incomplete",
+        category_id: categoryFilter ?? undefined,
         sort,
       });
       setFiles(data);
     } catch {
       // silently fail
     }
-  }, [sort, filter]);
+  }, [sort, filter, categoryFilter]);
 
   useEffect(() => {
     refresh();
+    getCategories().then(setCategories).catch(() => {});
   }, [refresh]);
 
   const handleRate = async (id: number) => {
@@ -110,6 +114,25 @@ export default function ReviewPage() {
             ))}
           </div>
         </div>
+        {categories.length > 0 && (
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-muted-foreground">Category:</label>
+            <select
+              value={categoryFilter ?? ""}
+              onChange={(e) =>
+                setCategoryFilter(e.target.value ? Number(e.target.value) : null)
+              }
+              className="rounded-lg bg-zinc-900 border border-border px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
+            >
+              <option value="">All</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {error && (

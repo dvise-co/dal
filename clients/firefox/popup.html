@@ -5,7 +5,7 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 320px;
+      width: 340px;
       font-family: system-ui, -apple-system, sans-serif;
       background: #09090b;
       color: #fafafa;
@@ -16,13 +16,21 @@
       font-weight: 700;
       margin-bottom: 12px;
     }
+    h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #a1a1aa;
+      margin: 16px 0 8px;
+      border-top: 1px solid #27272a;
+      padding-top: 12px;
+    }
     label {
       display: block;
       font-size: 11px;
       color: #a1a1aa;
       margin-bottom: 4px;
     }
-    input {
+    input, select {
       width: 100%;
       padding: 8px;
       border: 1px solid #27272a;
@@ -32,7 +40,7 @@
       font-size: 13px;
       outline: none;
     }
-    input:focus { border-color: #3b82f6; }
+    input:focus, select:focus { border-color: #3b82f6; }
     button {
       width: 100%;
       padding: 8px;
@@ -46,6 +54,20 @@
     }
     button:hover { background: #2563eb; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary {
+      background: #27272a;
+      color: #fafafa;
+    }
+    .btn-secondary:hover { background: #3f3f46; }
+    .btn-danger {
+      background: transparent;
+      border: 1px solid #7f1d1d;
+      color: #ef4444;
+      font-size: 11px;
+      padding: 4px 8px;
+      width: auto;
+    }
+    .btn-danger:hover { background: #450a0a; }
     .field { margin-bottom: 12px; }
     .status {
       font-size: 12px;
@@ -61,6 +83,28 @@
       text-align: center;
       margin-top: 12px;
     }
+    .cat-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .cat-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .cat-list li:hover { background: #18181b; }
+    .cat-row { display: flex; gap: 4px; }
+    .add-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .add-row input { flex: 1; }
+    .add-row button { width: auto; padding: 8px 12px; }
   </style>
 </head>
 <body>
@@ -76,10 +120,24 @@
     <input type="url" id="urlInput" placeholder="Paste a URL...">
   </div>
 
+  <div class="field">
+    <label>Category</label>
+    <select id="categorySelect">
+      <option value="">Uncategorized</option>
+    </select>
+  </div>
+
   <button id="queueBtn" disabled>Queue Download</button>
 
   <div id="status" class="status" style="display:none"></div>
   <div id="badge" class="badge"></div>
+
+  <h2>Categories</h2>
+  <ul id="catList" class="cat-list"></ul>
+  <div class="add-row">
+    <input type="text" id="newCatInput" placeholder="New category name...">
+    <button id="addCatBtn" class="btn-secondary">Add</button>
+  </div>
 
   <script src="popup.js"></script>
 </body>
