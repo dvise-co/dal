@@ -1,0 +1,10 @@
+target/
+web/
+clients/
+.git/
+.gitea/
+.claude/
+*.db
+*.db-wal
+*.db-shm
+.tmp-flow/

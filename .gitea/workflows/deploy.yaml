@@ -1,0 +1,28 @@
+name: Deploy — Docker Compose
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and restart containers
+        run: |
+          docker compose build --no-cache
+          docker compose up -d --force-recreate --remove-orphans
+
+      - name: Wait for services to start
+        run: |
+          sleep 5
+          curl -sf http://localhost:8550/api/health || echo "API health check failed"
+          curl -sf http://localhost:3000 > /dev/null || echo "Web health check failed"
+
+      - name: Clean up old images
+        run: docker image prune -f

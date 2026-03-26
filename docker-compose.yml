@@ -1,0 +1,24 @@
+services:
+  dal-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8550:8550"
+    volumes:
+      - ./dal.toml:/etc/dal/dal.toml:ro
+      - dal-data:/data
+      - ${DOWNLOAD_DIR:-./downloads}:/downloads
+    depends_on: []
+
+  dal-web:
+    build: ./web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_TELEMETRY_DISABLED=1
+      - DAL_API_URL=http://dal-api:8550
+      - HOSTNAME=0.0.0.0
+
+volumes:
+  dal-data:

@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Standalone output for Docker deployment
+  output: "standalone",
+
   // Privacy: disable image optimization CDN, serve all assets locally
   images: {
     unoptimized: true,
