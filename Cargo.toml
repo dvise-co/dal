@@ -16,7 +16,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 url = "2"
-portable-pty = "0.8"
+tokio-util = "0.7"
 
 [dev-dependencies]
 tempfile = "3"

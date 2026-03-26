@@ -30,6 +30,7 @@ struct QueueEntry {
     status: String,
     progress: Option<String>,
     error: Option<String>,
+    output: Option<String>,
     category_id: Option<i64>,
     position: Option<i64>,
     created_at: Option<String>,
@@ -71,7 +72,7 @@ async fn create(
     // Check for duplicate URL unless force is set
     if !body.force {
         let existing: Option<QueueEntry> = sqlx::query_as(
-            "SELECT id, url, status, progress, error, category_id, position, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
+            "SELECT id, url, status, progress, error, output, category_id, position, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
         )
         .bind(&body.url)
         .fetch_optional(&state.db)
@@ -108,11 +109,19 @@ async fn create(
         None
     };
 
+    // Assign position at end of queue
+    let max_pos: Option<i64> = sqlx::query_scalar("SELECT MAX(position) FROM queue")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(None);
+    let next_pos = max_pos.unwrap_or(-1) + 1;
+
     let entry: QueueEntry = sqlx::query_as(
-        "INSERT INTO queue (url, category_id) VALUES (?, ?) RETURNING id, url, status, progress, error, category_id, position, created_at, updated_at"
+        "INSERT INTO queue (url, category_id, position) VALUES (?, ?, ?) RETURNING id, url, status, progress, error, output, category_id, position, created_at, updated_at"
     )
     .bind(&body.url)
     .bind(category_id)
+    .bind(next_pos)
     .fetch_one(&state.db)
     .await
     .map_err(|e| (
@@ -128,12 +137,12 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<QueueEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let entries: Vec<QueueEntry> = if let Some(status) = params.status {
-        sqlx::query_as("SELECT id, url, status, progress, error, category_id, position, created_at, updated_at FROM queue WHERE status = ? ORDER BY position ASC, created_at DESC")
+        sqlx::query_as("SELECT id, url, status, progress, error, output, category_id, position, created_at, updated_at FROM queue WHERE status = ? ORDER BY position ASC, created_at DESC")
             .bind(status)
             .fetch_all(&state.db)
             .await
     } else {
-        sqlx::query_as("SELECT id, url, status, progress, error, category_id, position, created_at, updated_at FROM queue ORDER BY position ASC, created_at DESC")
+        sqlx::query_as("SELECT id, url, status, progress, error, output, category_id, position, created_at, updated_at FROM queue ORDER BY position ASC, created_at DESC")
             .fetch_all(&state.db)
             .await
     }

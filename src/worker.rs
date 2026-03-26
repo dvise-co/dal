@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use crate::AppState;
 use crate::rename;
@@ -16,12 +18,17 @@ pub struct ProgressUpdate {
 pub fn spawn_worker(
     state: AppState,
     progress_tx: broadcast::Sender<ProgressUpdate>,
+    cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(state.config.ytdlp.max_concurrent));
 
     tokio::spawn(async move {
         loop {
-            // Poll for pending items
+            if cancel.is_cancelled() {
+                tracing::info!("Worker shutting down");
+                return;
+            }
+
             let pending: Vec<(i64, String, Option<i64>)> = match sqlx::query_as(
                 "SELECT id, url, category_id FROM queue WHERE status = 'pending' ORDER BY position ASC, created_at ASC LIMIT 5"
             )
@@ -31,28 +38,38 @@ pub fn spawn_worker(
                 Ok(rows) => rows,
                 Err(e) => {
                     tracing::error!("Failed to poll queue: {}", e);
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                        _ = cancel.cancelled() => return
+                    }
                     continue;
                 }
             };
 
             if pending.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                    _ = cancel.cancelled() => return
+                }
                 continue;
             }
 
             for (id, url, category_id) in pending {
                 let permit = semaphore.clone().acquire_owned().await.unwrap();
                 let state = state.clone();
+                let cancel = cancel.clone();
                 let tx = progress_tx.clone();
 
                 tokio::spawn(async move {
-                    download_item(&state, id, &url, category_id, &tx).await;
+                    download_item(&state, id, &url, category_id, cancel, &tx).await;
                     drop(permit);
                 });
             }
 
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                _ = cancel.cancelled() => return
+            }
         }
     })
 }
@@ -62,8 +79,11 @@ async fn download_item(
     queue_id: i64,
     url: &str,
     category_id: Option<i64>,
+    cancel: CancellationToken,
     tx: &broadcast::Sender<ProgressUpdate>,
 ) {
+    tracing::info!("Starting download for queue {} url={}", queue_id, url);
+
     // Mark as downloading
     if let Err(e) = sqlx::query("UPDATE queue SET status = 'downloading', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
         .bind(queue_id)
@@ -73,13 +93,6 @@ async fn download_item(
         tracing::error!("Failed to update queue status for {}: {}", queue_id, e);
         return;
     }
-
-    let _ = tx.send(ProgressUpdate {
-        queue_id,
-        progress: "starting".to_string(),
-        status: "downloading".to_string(),
-        output: None,
-    });
 
     let download_dir = &state.config.storage.download_dir;
 
@@ -105,28 +118,31 @@ async fn download_item(
         base.push(&host);
     }
     let _ = std::fs::create_dir_all(&base);
-    let output_template = format!("{}/%(title)s.%(ext)s", base.display());
+    // Limit title to 150 bytes to avoid filesystem filename length limits (255 bytes)
+    let output_template = format!("{}/%(title).150B.%(ext)s", base.display());
 
-    // Use PTY to capture output — yt-dlp behaves like it's in a terminal
-    // (proper line buffering, progress output, color codes stripped by --newline)
-    let pty = portable_pty::native_pty_system();
-    let pty_pair = pty.openpty(portable_pty::PtySize {
-        rows: 24,
-        cols: 80,
-        pixel_width: 0,
-        pixel_height: 0,
-    }).expect("failed to open pty");
-
-    let mut pty_cmd = portable_pty::CommandBuilder::new(&state.config.ytdlp.binary);
-    pty_cmd.args(["--newline", "--continue", "--print", "after_move:filepath"]);
-    pty_cmd.args(["-o", &output_template]);
+    let mut cmd = tokio::process::Command::new(&state.config.ytdlp.binary);
+    cmd.arg("--newline")
+        .arg("--no-colors")
+        .arg("--verbose")
+        .arg("--continue")
+        .arg("--print").arg("after_move:filepath")
+        .arg("-o").arg(&output_template);
     for arg in &state.config.ytdlp.extra_args {
-        pty_cmd.arg(arg);
+        cmd.arg(arg);
     }
-    pty_cmd.arg(url);
+    cmd.arg(url)
+        .env("PYTHONUNBUFFERED", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
-    let mut pty_child = match pty_pair.slave.spawn_command(pty_cmd) {
-        Ok(c) => c,
+    tracing::debug!("Spawning yt-dlp for queue {}: {} -o {}", queue_id, &state.config.ytdlp.binary, &output_template);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => {
+            tracing::info!("yt-dlp spawned for queue {} (pid: {:?})", queue_id, c.id());
+            c
+        }
         Err(e) => {
             tracing::error!("Failed to spawn yt-dlp for queue {}: {}", queue_id, e);
             let _ = sqlx::query("UPDATE queue SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
@@ -134,127 +150,155 @@ async fn download_item(
                 .bind(queue_id)
                 .execute(&state.db)
                 .await;
-            let _ = tx.send(ProgressUpdate {
-                queue_id,
-                progress: String::new(),
-                status: "failed".to_string(),
-                output: Some(format!("Failed to spawn yt-dlp: {}", e)),
-            });
             return;
         }
     };
-    // Drop the slave so reads on the master will see EOF when the child exits
-    drop(pty_pair.slave);
 
-    // Read from PTY master in a blocking thread (PTY reads are blocking)
-    let reader = pty_pair.master.try_clone_reader().expect("failed to clone pty reader");
-    let pty_tx = tx.clone();
-    let pty_db = state.db.clone();
-    let pty_queue_id = queue_id;
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
     let mut final_filepath: Option<String> = None;
+    let mut output_log = String::new();
 
-    let read_handle = tokio::task::spawn_blocking(move || {
-        let mut buf_reader = std::io::BufReader::new(reader);
-        let mut line_buf = String::new();
-        let mut filepath: Option<String> = None;
+    // Stream stderr lines into output_log via a shared buffer
+    let db_stderr = state.db.clone();
+    let stderr_output = Arc::new(tokio::sync::Mutex::new(String::new()));
+    let stderr_output_clone = stderr_output.clone();
+    let stderr_queue_id = queue_id;
+    let stderr_tx = tx.clone();
 
-        loop {
-            line_buf.clear();
-            // Read raw bytes, splitting on \n (PTY converts \r\n)
-            let mut byte = [0u8; 1];
-            loop {
-                match std::io::Read::read(&mut buf_reader, &mut byte) {
-                    Ok(0) => return filepath, // EOF
-                    Ok(_) => {
-                        let ch = byte[0] as char;
-                        if ch == '\n' {
-                            break;
-                        } else if ch == '\r' {
-                            // Treat \r as line break too (progress lines)
-                            if !line_buf.is_empty() {
-                                break;
-                            }
-                        } else {
-                            line_buf.push(ch);
-                        }
-                    }
-                    Err(_) => return filepath, // Read error = done
-                }
-            }
-
-            let line = line_buf.trim().to_string();
-            if line.is_empty() {
-                continue;
-            }
-
-            if line.starts_with("[download]") {
-                if let Some(pct) = parse_progress(&line) {
-                    // Update DB progress (blocking context, use Handle)
-                    let db = pty_db.clone();
-                    let pct_clone = pct.clone();
-                    let _ = tokio::runtime::Handle::current().block_on(async {
-                        sqlx::query("UPDATE queue SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                            .bind(&pct_clone)
-                            .bind(pty_queue_id)
-                            .execute(&db)
-                            .await
-                    });
-                    let _ = pty_tx.send(ProgressUpdate {
-                        queue_id: pty_queue_id,
-                        progress: pct,
-                        status: "downloading".to_string(),
-                        output: Some(line),
-                    });
-                } else {
-                    let _ = pty_tx.send(ProgressUpdate {
-                        queue_id: pty_queue_id,
-                        progress: String::new(),
-                        status: "downloading".to_string(),
-                        output: Some(line),
-                    });
-                }
-            } else if line.starts_with('[') || line.starts_with("WARNING") || line.starts_with("ERROR") {
-                let _ = pty_tx.send(ProgressUpdate {
-                    queue_id: pty_queue_id,
-                    progress: String::new(),
-                    status: "downloading".to_string(),
-                    output: Some(line),
-                });
-            } else {
-                // Lines without brackets are likely the --print output (final filepath)
-                filepath = Some(line.clone());
-                let _ = pty_tx.send(ProgressUpdate {
-                    queue_id: pty_queue_id,
-                    progress: String::new(),
-                    status: "downloading".to_string(),
-                    output: Some(line),
-                });
-            }
+    let stderr_handle = tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            let line = line.trim().to_string();
+            if line.is_empty() { continue; }
+            tracing::info!("yt-dlp stderr [{}]: {}", stderr_queue_id, &line);
+            let mut log = stderr_output_clone.lock().await;
+            if !log.is_empty() { log.push('\n'); }
+            log.push_str(&line);
+            let _ = sqlx::query("UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                .bind(log.as_str())
+                .bind(stderr_queue_id)
+                .execute(&db_stderr)
+                .await;
+            let _ = stderr_tx.send(ProgressUpdate {
+                queue_id: stderr_queue_id,
+                progress: String::new(),
+                status: "downloading".to_string(),
+                output: Some(line),
+            });
         }
     });
 
-    // Wait for both the reader and the child process
-    if let Ok(fp) = read_handle.await {
-        final_filepath = fp;
+    // Read stdout for progress and final filepath
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    loop {
+        tokio::select! {
+            line_result = reader.next_line() => {
+                match line_result {
+                    Ok(Some(line)) => {
+                        let line = line.trim().to_string();
+                        if line.is_empty() { continue; }
+
+                        tracing::info!("yt-dlp stdout [{}]: {}", queue_id, &line);
+
+                        // Append to output log
+                        if !output_log.is_empty() { output_log.push('\n'); }
+                        output_log.push_str(&line);
+
+                        // Trim to last 200 lines
+                        let line_count = output_log.chars().filter(|c| *c == '\n').count();
+                        if line_count > 200 {
+                            if let Some(pos) = output_log.find('\n') {
+                                output_log = output_log[pos + 1..].to_string();
+                            }
+                        }
+
+                        if line.starts_with("[download]") {
+                            if let Some(pct) = parse_progress(&line) {
+                                let _ = sqlx::query("UPDATE queue SET progress = ?, output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                                    .bind(&pct)
+                                    .bind(&output_log)
+                                    .bind(queue_id)
+                                    .execute(&state.db)
+                                    .await;
+                                let _ = tx.send(ProgressUpdate {
+                                    queue_id,
+                                    progress: pct,
+                                    status: "downloading".to_string(),
+                                    output: Some(line),
+                                });
+                            }
+                        } else if line.starts_with('[') || line.starts_with("WARNING") || line.starts_with("ERROR") {
+                            let _ = sqlx::query("UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                                .bind(&output_log)
+                                .bind(queue_id)
+                                .execute(&state.db)
+                                .await;
+                            let _ = tx.send(ProgressUpdate {
+                                queue_id,
+                                progress: String::new(),
+                                status: "downloading".to_string(),
+                                output: Some(line),
+                            });
+                        } else {
+                            // --print output (final filepath)
+                            final_filepath = Some(line);
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::info!("yt-dlp stdout EOF for queue {}", queue_id);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("yt-dlp stdout read error for queue {}: {}", queue_id, e);
+                        break;
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
+                tracing::info!("Killing yt-dlp for queue {} due to shutdown", queue_id);
+                let _ = child.kill().await;
+                return;
+            }
+        }
     }
-    let status = pty_child.wait();
+
+    // Merge any stderr output
+    {
+        let stderr_log = stderr_output.lock().await;
+        if !stderr_log.is_empty() {
+            if !output_log.is_empty() { output_log.push('\n'); }
+            output_log.push_str(&stderr_log);
+            let _ = sqlx::query("UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                .bind(&output_log)
+                .bind(queue_id)
+                .execute(&state.db)
+                .await;
+        }
+    }
+
+    let _ = stderr_handle.await;
+    let status = child.wait().await;
+    tracing::info!("yt-dlp exited for queue {}: {:?}, filepath={:?}", queue_id, status, final_filepath);
 
     match status {
         Ok(exit) if exit.success() => {
-            handle_success(state, queue_id, category_id, final_filepath, tx).await;
+            handle_success(state, queue_id, category_id, final_filepath).await;
         }
         Ok(_) | Err(_) => {
-            handle_failure(state, queue_id, category_id, final_filepath, download_dir, tx).await;
+            handle_failure(state, queue_id, category_id, final_filepath, download_dir).await;
         }
     }
 }
+
 
 async fn handle_success(
     state: &AppState,
     queue_id: i64,
     category_id: Option<i64>,
     final_filepath: Option<String>,
-    tx: &broadcast::Sender<ProgressUpdate>,
 ) {
     if let Some(ref filepath) = final_filepath {
         let path = std::path::Path::new(filepath);
@@ -279,13 +323,6 @@ async fn handle_success(
         .execute(&state.db)
         .await;
 
-    let _ = tx.send(ProgressUpdate {
-        queue_id,
-        progress: "100%".to_string(),
-        status: "completed".to_string(),
-        output: Some("Download completed".to_string()),
-    });
-
     tracing::info!("Download completed for queue {}", queue_id);
 }
 
@@ -295,13 +332,10 @@ async fn handle_failure(
     category_id: Option<i64>,
     final_filepath: Option<String>,
     download_dir: &str,
-    tx: &broadcast::Sender<ProgressUpdate>,
 ) {
-    // Check if a large file was left behind (incomplete download)
     if let Some(ref filepath) = final_filepath {
         if let Ok(meta) = std::fs::metadata(filepath) {
             if meta.len() > 1_000_000 {
-                // File is > 1MB, treat as incomplete
                 let path = std::path::Path::new(filepath);
                 let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 let incomplete_name = rename::incomplete_filename(&filename);
@@ -327,22 +361,33 @@ async fn handle_failure(
         }
     }
 
-    // Also check for .part files in the download dir
-    // yt-dlp with --continue will resume from these
-
     let _ = sqlx::query("UPDATE queue SET status = 'failed', error = 'Download failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
         .bind(queue_id)
         .execute(&state.db)
         .await;
 
-    let _ = tx.send(ProgressUpdate {
-        queue_id,
-        progress: String::new(),
-        status: "failed".to_string(),
-        output: Some("Download failed".to_string()),
-    });
-
     tracing::error!("Download failed for queue {}", queue_id);
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 fn parse_host(url: &str) -> Option<String> {
@@ -352,8 +397,6 @@ fn parse_host(url: &str) -> Option<String> {
 }
 
 fn parse_progress(line: &str) -> Option<String> {
-    // [download]  45.2% of ~50.00MiB at  5.00MiB/s ETA 00:05
-    // [download] 100% of 50.00MiB
     if let Some(pct_end) = line.find('%') {
         let before = &line[..pct_end];
         let pct_start = before.rfind(|c: char| !c.is_ascii_digit() && c != '.')?;
@@ -365,7 +408,6 @@ fn parse_progress(line: &str) -> Option<String> {
     None
 }
 
-/// Reset any downloads that were in progress when the server shut down
 pub async fn reset_interrupted_downloads(db: &sqlx::SqlitePool) {
     let result = sqlx::query("UPDATE queue SET status = 'pending', progress = NULL, updated_at = CURRENT_TIMESTAMP WHERE status = 'downloading'")
         .execute(db)
@@ -412,5 +454,12 @@ mod tests {
         assert_eq!(parse_host("https://vimeo.com/12345"), Some("vimeo.com".to_string()));
         assert_eq!(parse_host("https://x.com/user/status/123"), Some("x.com".to_string()));
         assert_eq!(parse_host("not-a-url"), None);
+    }
+
+    #[test]
+    fn test_strip_ansi() {
+        assert_eq!(strip_ansi("\x1b[0;94m[download]\x1b[0m  45.2%"), "[download]  45.2%");
+        assert_eq!(strip_ansi("no escape codes"), "no escape codes");
+        assert_eq!(strip_ansi(""), "");
     }
 }

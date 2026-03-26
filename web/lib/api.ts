@@ -4,6 +4,7 @@ export interface QueueEntry {
   status: "pending" | "downloading" | "completed" | "failed";
   progress: string | null;
   error: string | null;
+  output: string | null;
   category_id: number | null;
   position: number | null;
   created_at: string;

@@ -2,6 +2,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -51,8 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Reset any interrupted downloads from previous run
     worker::reset_interrupted_downloads(&pool).await;
 
-    // Create broadcast channel for progress updates
-    let (progress_tx, _) = broadcast::channel::<worker::ProgressUpdate>(128);
+    // Broadcast channel for real-time progress via WebSocket
+    let (progress_tx, _) = broadcast::channel::<worker::ProgressUpdate>(256);
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let state = AppState {
@@ -61,8 +62,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         progress_tx: progress_tx.clone(),
     };
 
-    // Spawn download worker
-    worker::spawn_worker(state.clone(), progress_tx);
+    // Spawn download worker with cancellation token
+    let cancel = CancellationToken::new();
+    let worker_handle = worker::spawn_worker(state.clone(), progress_tx, cancel.clone());
 
     let app = api::router()
         .layer(CorsLayer::permissive())
@@ -72,7 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Listening on {}", addr);
 
-    // Graceful shutdown on SIGTERM/SIGINT
     let shutdown = async {
         tokio::signal::ctrl_c().await.ok();
         tracing::info!("Shutdown signal received, stopping...");
@@ -82,9 +83,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown)
         .await?;
 
-    // Reset downloading entries to pending for next startup
+    cancel.cancel();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        worker_handle,
+    ).await;
+
     worker::reset_interrupted_downloads(&state.db).await;
 
     tracing::info!("DAL server stopped");
-    Ok(())
+    std::process::exit(0);
 }
