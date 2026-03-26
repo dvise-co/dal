@@ -22,6 +22,7 @@ pub struct StorageConfig {
     pub download_dir: String,
     pub database: String,
     pub segment_by_host: bool,
+    pub display_path_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +50,25 @@ impl Default for StorageConfig {
             download_dir: "./downloads".to_string(),
             database: "./dal.db".to_string(),
             segment_by_host: true,
+            display_path_prefix: None,
+        }
+    }
+}
+
+impl StorageConfig {
+    /// Rewrites a filesystem path for display by stripping the `download_dir`
+    /// prefix and prepending the configured `display_path_prefix`.
+    /// Returns the path unchanged when no prefix is configured.
+    pub fn display_path(&self, path: &str) -> String {
+        match &self.display_path_prefix {
+            Some(prefix) => {
+                let stripped = path
+                    .strip_prefix(&self.download_dir)
+                    .unwrap_or(path)
+                    .trim_start_matches('/');
+                format!("{}/{}", prefix.trim_end_matches('/'), stripped)
+            }
+            None => path.to_string(),
         }
     }
 }
@@ -115,6 +135,7 @@ mod tests {
             download_dir = "/tmp/videos"
             database = "/tmp/dal.db"
             segment_by_host = false
+            display_path_prefix = "/mnt/media"
 
             [ytdlp]
             binary = "/usr/bin/yt-dlp"
@@ -128,6 +149,10 @@ mod tests {
         assert_eq!(config.server.port, 9000);
         assert_eq!(config.storage.download_dir, "/tmp/videos");
         assert!(!config.storage.segment_by_host);
+        assert_eq!(
+            config.storage.display_path_prefix.as_deref(),
+            Some("/mnt/media")
+        );
         assert_eq!(config.ytdlp.max_concurrent, 3);
         assert_eq!(config.ytdlp.default_args, vec!["--newline", "--continue"]);
         assert_eq!(
@@ -153,5 +178,40 @@ mod tests {
     fn test_load_missing_file() {
         let config = load_config(Path::new("/nonexistent/path.toml")).unwrap();
         assert_eq!(config.server.port, 8550);
+    }
+
+    #[test]
+    fn test_display_path_with_prefix() {
+        let storage = StorageConfig {
+            download_dir: "/data".to_string(),
+            display_path_prefix: Some("/mnt/media".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage.display_path("/data/movies/file.mkv"),
+            "/mnt/media/movies/file.mkv"
+        );
+    }
+
+    #[test]
+    fn test_display_path_without_prefix() {
+        let storage = StorageConfig::default();
+        assert_eq!(
+            storage.display_path("./downloads/movies/file.mkv"),
+            "./downloads/movies/file.mkv"
+        );
+    }
+
+    #[test]
+    fn test_display_path_trailing_slash_normalization() {
+        let storage = StorageConfig {
+            download_dir: "/data/".to_string(),
+            display_path_prefix: Some("/mnt/media/".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage.display_path("/data/movies/file.mkv"),
+            "/mnt/media/movies/file.mkv"
+        );
     }
 }

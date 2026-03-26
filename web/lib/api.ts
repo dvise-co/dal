@@ -28,6 +28,7 @@ export interface FileEntry {
   filename: string;
   original: string;
   path: string;
+  display_path: string;
   rating: number | null;
   size_bytes: number | null;
   duration: string | null;

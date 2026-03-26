@@ -39,6 +39,7 @@ struct FileEntry {
 struct FileResponse {
     #[serde(flatten)]
     entry: FileEntry,
+    display_path: String,
     exists: bool,
 }
 
@@ -107,7 +108,12 @@ async fn list(
         .into_iter()
         .map(|e| {
             let exists = std::path::Path::new(&e.path).exists();
-            FileResponse { entry: e, exists }
+            let display_path = state.config.storage.display_path(&e.path);
+            FileResponse {
+                entry: e,
+                display_path,
+                exists,
+            }
         })
         .collect();
 
@@ -346,8 +352,10 @@ async fn scan(
             Json(ErrorResponse { error: format!("Database error: {}", e) }),
         ))?;
 
+        let display_path = state.config.storage.display_path(&entry.path);
         new_files.push(FileResponse {
             entry,
+            display_path,
             exists: true,
         });
     }

@@ -246,7 +246,7 @@ export default function ReviewPage() {
                 {/* Expanded detail: path + metadata */}
                 {isExpanded && (
                   <div className="px-3 pb-2 pt-1.5 border-t border-border/50 bg-muted/30">
-                    <p className="text-[10px] font-mono text-muted-foreground break-all">{file.path}</p>
+                    <p className="text-[10px] font-mono text-muted-foreground break-all">{file.display_path}</p>
                     <div className="flex items-center gap-3 text-[10px] text-muted-foreground mt-1">
                       <span>{formatBytes(file.size_bytes)}</span>
                       {file.duration && <span>{file.duration}</span>}

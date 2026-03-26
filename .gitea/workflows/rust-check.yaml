@@ -15,29 +15,17 @@ on:
       - "Cargo.lock"
 
 jobs:
-  test:
-    name: Test Suite
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run tests
-        run: cargo test --verbose
-
-  lint:
-    name: Clippy Lint
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
-
-  format:
-    name: Format Check
+  check:
+    name: Test, Lint & Format
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
       - name: Check formatting
         run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Run tests
+        run: cargo test --verbose
