@@ -240,22 +240,21 @@ async fn download_item(
                             output_log = output_log[pos + 1..].to_string();
                         }
 
-                        if line.starts_with("[download]") {
-                            if let Some(pct) = parse_progress(&line) {
-                                let _ = sqlx::query("UPDATE queue SET progress = ?, output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                                    .bind(&pct)
-                                    .bind(&output_log)
-                                    .bind(queue_id)
-                                    .execute(&state.db)
-                                    .await;
-                                let _ = tx.send(ProgressUpdate {
-                                    queue_id,
-                                    progress: pct,
-                                    status: "downloading".to_string(),
-                                    output: Some(line),
-                                });
-                            }
-                        } else if line.starts_with('[') || line.starts_with("WARNING") || line.starts_with("ERROR") {
+                        // Parse progress percentage if present
+                        if let Some(pct) = parse_progress(&line) {
+                            let _ = sqlx::query("UPDATE queue SET progress = ?, output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                                .bind(&pct)
+                                .bind(&output_log)
+                                .bind(queue_id)
+                                .execute(&state.db)
+                                .await;
+                            let _ = tx.send(ProgressUpdate {
+                                queue_id,
+                                progress: pct,
+                                status: "downloading".to_string(),
+                                output: Some(line),
+                            });
+                        } else if line.starts_with('[') || line.starts_with("WARNING") || line.starts_with("ERROR") || line.starts_with("DEBUG") {
                             let _ = sqlx::query("UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                                 .bind(&output_log)
                                 .bind(queue_id)

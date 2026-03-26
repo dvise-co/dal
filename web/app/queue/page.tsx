@@ -18,7 +18,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 type StatusFilter = "all" | "pending" | "downloading" | "completed" | "failed" | "archived";
 
@@ -390,18 +389,23 @@ export default function QueuePage() {
 }
 
 function LogPanel({ lines }: { lines: string[] }) {
-  const ref = useRef<HTMLPreElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+    const el = containerRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [lines.length]);
 
   return (
-    <ScrollArea className="max-h-40 rounded border border-border bg-muted/50">
-      <pre ref={ref} className="p-2 text-[10px] font-mono text-muted-foreground leading-relaxed">
-        {lines.map((line, i) => (
-          <div key={i}>{line}</div>
-        ))}
-      </pre>
-    </ScrollArea>
+    <div
+      ref={containerRef}
+      className="h-48 overflow-y-auto rounded border border-border bg-black/40 p-2 font-mono text-[10px] text-green-400/80 leading-relaxed"
+    >
+      {lines.map((line, i) => (
+        <div key={i} className="whitespace-pre-wrap break-all">{line}</div>
+      ))}
+    </div>
   );
 }
