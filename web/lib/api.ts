@@ -8,8 +8,18 @@ export interface QueueEntry {
   category_id: number | null;
   position: number | null;
   archived: boolean | null;
+  attempts: number | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface HistoryEntry {
+  id: number;
+  queue_id: number;
+  status: string;
+  error: string | null;
+  output: string | null;
+  created_at: string;
 }
 
 export interface FileEntry {
@@ -77,6 +87,18 @@ export async function archiveAllQueue(status?: string): Promise<void> {
     method: "POST",
     body: JSON.stringify({ status }),
   });
+}
+
+export async function retryQueue(id: number): Promise<void> {
+  return fetchJSON(`/queue/${id}/retry`, { method: "POST" });
+}
+
+export async function retryAllQueue(): Promise<void> {
+  return fetchJSON("/queue/retry-all", { method: "POST" });
+}
+
+export async function getQueueHistory(id: number): Promise<HistoryEntry[]> {
+  return fetchJSON(`/queue/${id}/history`);
 }
 
 export async function addToQueue(

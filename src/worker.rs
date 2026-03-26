@@ -86,9 +86,9 @@ async fn download_item(
 ) {
     tracing::info!("Starting download for queue {} url={}", queue_id, url);
 
-    // Mark as downloading
+    // Mark as downloading and increment attempts
     if let Err(e) = sqlx::query(
-        "UPDATE queue SET status = 'downloading', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE queue SET status = 'downloading', attempts = COALESCE(attempts, 0) + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(queue_id)
     .execute(&state.db)
@@ -97,6 +97,12 @@ async fn download_item(
         tracing::error!("Failed to update queue status for {}: {}", queue_id, e);
         return;
     }
+
+    // Record history
+    let _ = sqlx::query("INSERT INTO queue_history (queue_id, status) VALUES (?, 'downloading')")
+        .bind(queue_id)
+        .execute(&state.db)
+        .await;
 
     let download_dir = &state.config.storage.download_dir;
 
@@ -180,6 +186,7 @@ async fn download_item(
 
     let mut final_filepath: Option<String> = None;
     let mut output_log = String::new();
+    let mut reached_100_pct = false;
 
     // Stream stderr lines into output_log via a shared buffer
     let db_stderr = state.db.clone();
@@ -242,6 +249,9 @@ async fn download_item(
 
                         // Parse progress percentage if present
                         if let Some(pct) = parse_progress(&line) {
+                            if pct == "100%" {
+                                reached_100_pct = true;
+                            }
                             let _ = sqlx::query("UPDATE queue SET progress = ?, output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                                 .bind(&pct)
                                 .bind(&output_log)
@@ -316,14 +326,47 @@ async fn download_item(
         final_filepath
     );
 
+    // Check for provisional success: yt-dlp errored but progress hit 100% and file exists
+    let is_provisional_success = reached_100_pct
+        && final_filepath.as_ref().is_some_and(|fp| {
+            std::fs::metadata(fp)
+                .map(|m| m.len() > 1_000)
+                .unwrap_or(false)
+        });
+
     match status {
         Ok(exit) if exit.success() => {
+            record_history(&state.db, queue_id, "completed", None).await;
+            handle_success(state, queue_id, category_id, final_filepath).await;
+        }
+        _ if is_provisional_success => {
+            tracing::warn!(
+                "yt-dlp exited with error for queue {} but file appears complete (100% reached)",
+                queue_id
+            );
+            record_history(
+                &state.db,
+                queue_id,
+                "completed",
+                Some("Provisional success: yt-dlp reported error but download reached 100%"),
+            )
+            .await;
             handle_success(state, queue_id, category_id, final_filepath).await;
         }
         Ok(_) | Err(_) => {
+            record_history(&state.db, queue_id, "failed", None).await;
             handle_failure(state, queue_id, category_id, final_filepath, download_dir).await;
         }
     }
+}
+
+async fn record_history(db: &sqlx::SqlitePool, queue_id: i64, status: &str, error: Option<&str>) {
+    let _ = sqlx::query("INSERT INTO queue_history (queue_id, status, error) VALUES (?, ?, ?)")
+        .bind(queue_id)
+        .bind(status)
+        .bind(error)
+        .execute(db)
+        .await;
 }
 
 async fn handle_success(

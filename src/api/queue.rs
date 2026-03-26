@@ -13,9 +13,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/queue", post(create).get(list))
         .route("/api/queue/reorder", put(reorder))
         .route("/api/queue/archive-all", post(archive_all))
+        .route("/api/queue/retry-all", post(retry_all))
         .route("/api/queue/{id}", delete(cancel))
         .route("/api/queue/{id}/archive", post(archive))
         .route("/api/queue/{id}/unarchive", post(unarchive))
+        .route("/api/queue/{id}/retry", post(retry))
+        .route("/api/queue/{id}/history", axum::routing::get(history))
 }
 
 #[derive(Deserialize)]
@@ -37,8 +40,19 @@ struct QueueEntry {
     category_id: Option<i64>,
     position: Option<i64>,
     archived: Option<bool>,
+    attempts: Option<i64>,
     created_at: Option<String>,
     updated_at: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct HistoryEntry {
+    id: i64,
+    queue_id: i64,
+    status: String,
+    error: Option<String>,
+    output: Option<String>,
+    created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -85,7 +99,7 @@ async fn create(
     // Check for duplicate URL unless force is set
     if !body.force {
         let existing: Option<QueueEntry> = sqlx::query_as(
-            "SELECT id, url, status, progress, error, output, category_id, position, archived, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
+            "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
         )
         .bind(&body.url)
         .fetch_optional(&state.db)
@@ -131,7 +145,7 @@ async fn create(
     let next_pos = max_pos.unwrap_or(-1) + 1;
 
     let entry: QueueEntry = sqlx::query_as(
-        "INSERT INTO queue (url, category_id, position) VALUES (?, ?, ?) RETURNING id, url, status, progress, error, output, category_id, position, archived, created_at, updated_at"
+        "INSERT INTO queue (url, category_id, position) VALUES (?, ?, ?) RETURNING id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at"
     )
     .bind(&body.url)
     .bind(category_id)
@@ -151,7 +165,7 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<QueueEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
-        "SELECT id, url, status, progress, error, output, category_id, position, archived, created_at, updated_at FROM queue",
+        "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at FROM queue",
     );
     let mut conditions: Vec<String> = Vec::new();
 
@@ -299,4 +313,91 @@ async fn archive_all(
         )
     })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn retry(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    // Record history before resetting
+    let _ = sqlx::query(
+        "INSERT INTO queue_history (queue_id, status, error, output) SELECT id, status, error, output FROM queue WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await;
+
+    let result = sqlx::query(
+        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed')",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Database error: {}", e),
+            }),
+        )
+    })?;
+
+    if result.rows_affected() == 0 {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Entry not found or not in a retryable state".to_string(),
+            }),
+        ))
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
+
+async fn retry_all(
+    State(state): State<AppState>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    // Record history for all failed entries
+    let _ = sqlx::query(
+        "INSERT INTO queue_history (queue_id, status, error, output) SELECT id, status, error, output FROM queue WHERE status = 'failed'",
+    )
+    .execute(&state.db)
+    .await;
+
+    sqlx::query(
+        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE status = 'failed'",
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Database error: {}", e),
+            }),
+        )
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn history(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<HistoryEntry>>, (StatusCode, Json<ErrorResponse>)> {
+    let entries: Vec<HistoryEntry> = sqlx::query_as(
+        "SELECT id, queue_id, status, error, output, created_at FROM queue_history WHERE queue_id = ? ORDER BY created_at DESC",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Database error: {}", e),
+            }),
+        )
+    })?;
+
+    Ok(Json(entries))
 }

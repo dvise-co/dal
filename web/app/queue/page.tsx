@@ -9,9 +9,13 @@ import {
   archiveQueue,
   unarchiveQueue,
   archiveAllQueue,
+  retryQueue,
+  retryAllQueue,
+  getQueueHistory,
   getCategories,
   QueueEntry,
   Category,
+  HistoryEntry,
 } from "@/lib/api";
 import { subscribeProgress, ProgressUpdate } from "@/lib/ws";
 import { Badge } from "@/components/ui/badge";
@@ -134,7 +138,8 @@ export default function QueuePage() {
 
   const handleForceDownload = async (e: React.FormEvent) => { await handleSubmit(e, true); setDuplicateUrl(""); };
   const handleCancel = async (id: number) => { try { await cancelQueue(id); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Failed"); } };
-  const handleRetry = async (entry: QueueEntry) => { try { await addToQueue(entry.url, true); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Failed"); } };
+  const handleRetry = async (id: number) => { try { await retryQueue(id); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Failed"); } };
+  const handleRetryAll = async () => { try { await retryAllQueue(); await refresh(); } catch {} };
   const handleArchive = async (id: number) => { try { await archiveQueue(id); await refresh(); } catch {} };
   const handleUnarchive = async (id: number) => { try { await unarchiveQueue(id); await refresh(); } catch {} };
   const handleArchiveAll = async (status?: string) => { try { await archiveAllQueue(status); await refresh(); } catch {} };
@@ -232,9 +237,14 @@ export default function QueuePage() {
           </Button>
         )}
         {counts.failed > 0 && (
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleArchiveAll("failed")}>
-            Archive Failed
-          </Button>
+          <>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleArchiveAll("failed")}>
+              Archive Failed
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleRetryAll}>
+              Retry All Failed
+            </Button>
+          </>
         )}
 
         {/* Category checkboxes */}
@@ -309,6 +319,10 @@ export default function QueuePage() {
                     {entry.status}
                   </Badge>
 
+                  {(entry.attempts ?? 0) > 1 && (
+                    <span className="text-[10px] text-muted-foreground">#{entry.attempts}</span>
+                  )}
+
                   {entry.status === "downloading" && entry.progress && (
                     <span className="shrink-0 font-mono text-primary w-10 text-right text-[11px]">{entry.progress}</span>
                   )}
@@ -370,13 +384,17 @@ export default function QueuePage() {
                         </Button>
                       )}
                       {entry.status === "failed" && (
-                        <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={(e) => { e.stopPropagation(); handleRetry(entry); }}>
+                        <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={(e) => { e.stopPropagation(); handleRetry(entry.id); }}>
                           Retry
                         </Button>
                       )}
                     </div>
 
                     {outputLines.length > 0 && <LogPanel lines={outputLines} />}
+
+                    {(entry.attempts ?? 0) > 1 && (
+                      <HistoryPanel queueId={entry.id} />
+                    )}
                   </div>
                 )}
               </div>
@@ -405,6 +423,34 @@ function LogPanel({ lines }: { lines: string[] }) {
     >
       {lines.map((line, i) => (
         <div key={i} className="whitespace-pre-wrap break-all">{line}</div>
+      ))}
+    </div>
+  );
+}
+
+function HistoryPanel({ queueId }: { queueId: number }) {
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    getQueueHistory(queueId).then((data) => {
+      setEntries(data);
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  }, [queueId]);
+
+  if (!loaded) return <p className="text-[10px] text-muted-foreground">Loading history...</p>;
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] text-muted-foreground font-medium">Previous attempts:</p>
+      {entries.map((h) => (
+        <div key={h.id} className="text-[10px] text-muted-foreground flex items-center gap-2">
+          <Badge variant="outline" className="text-[9px] px-1 py-0">{h.status}</Badge>
+          <span>{h.created_at}</span>
+          {h.error && <span className="text-destructive truncate">{h.error}</span>}
+        </div>
       ))}
     </div>
   );
