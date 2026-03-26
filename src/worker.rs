@@ -326,32 +326,39 @@ async fn download_item(
         final_filepath
     );
 
-    // Check for provisional success: yt-dlp errored but progress hit 100% and file exists
-    let is_provisional_success = reached_100_pct
-        && final_filepath.as_ref().is_some_and(|fp| {
-            std::fs::metadata(fp)
-                .map(|m| m.len() > 1_000)
-                .unwrap_or(false)
-        });
+    // Check for provisional success:
+    // 1. Progress reached 100% and file exists (>1KB)
+    // 2. File exists and is large (>100MB) regardless of progress
+    let file_size = final_filepath
+        .as_ref()
+        .and_then(|fp| std::fs::metadata(fp).ok().map(|m| m.len()));
+
+    let is_provisional = !matches!(&status, Ok(exit) if exit.success())
+        && file_size.is_some_and(|size| (reached_100_pct && size > 1_000) || size > 100_000_000);
+
+    let provisional_reason = if is_provisional {
+        if reached_100_pct {
+            Some("Provisional success: yt-dlp reported error but download reached 100%")
+        } else {
+            Some("Provisional success: yt-dlp reported error but file is >100MB")
+        }
+    } else {
+        None
+    };
 
     match status {
         Ok(exit) if exit.success() => {
             record_history(&state.db, queue_id, "completed", None).await;
-            handle_success(state, queue_id, category_id, final_filepath).await;
+            handle_success(state, queue_id, category_id, final_filepath, false).await;
         }
-        _ if is_provisional_success => {
+        _ if is_provisional => {
             tracing::warn!(
-                "yt-dlp exited with error for queue {} but file appears complete (100% reached)",
-                queue_id
-            );
-            record_history(
-                &state.db,
+                "yt-dlp exited with error for queue {} — treating as provisional success: {}",
                 queue_id,
-                "completed",
-                Some("Provisional success: yt-dlp reported error but download reached 100%"),
-            )
-            .await;
-            handle_success(state, queue_id, category_id, final_filepath).await;
+                provisional_reason.unwrap_or("unknown")
+            );
+            record_history(&state.db, queue_id, "completed", provisional_reason).await;
+            handle_success(state, queue_id, category_id, final_filepath, true).await;
         }
         Ok(_) | Err(_) => {
             record_history(&state.db, queue_id, "failed", None).await;
@@ -374,6 +381,7 @@ async fn handle_success(
     queue_id: i64,
     category_id: Option<i64>,
     final_filepath: Option<String>,
+    provisional: bool,
 ) {
     if let Some(ref filepath) = final_filepath {
         let path = std::path::Path::new(filepath);
@@ -385,7 +393,7 @@ async fn handle_success(
         let size_bytes = std::fs::metadata(filepath).map(|m| m.len() as i64).ok();
 
         let _ = sqlx::query(
-            "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id, provisional) VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(queue_id)
         .bind(&filename)
@@ -393,6 +401,7 @@ async fn handle_success(
         .bind(filepath)
         .bind(size_bytes)
         .bind(category_id)
+        .bind(provisional)
         .execute(&state.db)
         .await;
     }

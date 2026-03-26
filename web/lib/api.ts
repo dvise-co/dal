@@ -33,6 +33,7 @@ export interface FileEntry {
   duration: string | null;
   thumbnail: string | null;
   category_id: number | null;
+  provisional: boolean | null;
   created_at: string;
   rated_at: string | null;
   exists: boolean;
@@ -157,6 +158,10 @@ export async function deleteFile(id: number): Promise<void> {
 
 export async function scanFiles(): Promise<FileEntry[]> {
   return fetchJSON("/files/scan", { method: "POST" });
+}
+
+export async function requeueFile(id: number): Promise<void> {
+  return fetchJSON(`/files/${id}/requeue`, { method: "POST" });
 }
 
 // Categories

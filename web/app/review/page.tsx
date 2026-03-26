@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { getFiles, rateFile, deleteFile, scanFiles, getCategories, FileEntry, Category, formatBytes } from "@/lib/api";
+import { getFiles, rateFile, deleteFile, scanFiles, requeueFile, getCategories, FileEntry, Category, formatBytes } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,6 +64,16 @@ export default function ReviewPage() {
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete");
+    }
+  };
+
+  const handleRequeue = async (id: number) => {
+    if (!confirm("This will delete the current file and re-download. Continue?")) return;
+    try {
+      await requeueFile(id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to requeue");
     }
   };
 
@@ -174,6 +184,10 @@ export default function ReviewPage() {
                     <Badge variant="destructive" className="text-[10px] px-1.5 py-0">INC</Badge>
                   )}
 
+                  {file.provisional && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-yellow-500 border-yellow-500/30">PROV</Badge>
+                  )}
+
                   {catName && (
                     <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-accent/20 text-accent-foreground">
                       {catName}
@@ -205,6 +219,14 @@ export default function ReviewPage() {
                     <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleRate(file.id)}>
                       Rate
                     </Button>
+                    {file.provisional && (
+                      <Button
+                        variant="ghost" size="sm" className="h-5 text-[10px] px-1.5 text-yellow-500"
+                        onClick={() => handleRequeue(file.id)}
+                      >
+                        Requeue
+                      </Button>
+                    )}
                     <Button
                       variant="ghost" size="sm" className="h-5 text-[10px] px-1.5 text-destructive"
                       onClick={() => handleDelete(file.id, file.filename)}

@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/files", get(list))
         .route("/api/files/scan", post(scan))
         .route("/api/files/{id}/rate", post(rate))
+        .route("/api/files/{id}/requeue", post(requeue))
         .route("/api/files/{id}", delete(remove))
 }
 
@@ -29,6 +30,7 @@ struct FileEntry {
     duration: Option<String>,
     thumbnail: Option<String>,
     category_id: Option<i64>,
+    provisional: Option<bool>,
     created_at: Option<String>,
     rated_at: Option<String>,
 }
@@ -63,7 +65,7 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<FileResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files",
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files",
     );
     let mut conditions: Vec<String> = Vec::new();
 
@@ -128,7 +130,7 @@ async fn rate(
 
     // Get current file record
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files WHERE id = ?"
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -160,7 +162,7 @@ async fn rate(
 
     // Update database
     let updated: FileEntry = sqlx::query_as(
-        "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at"
+        "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
     )
     .bind(&new_filename)
     .bind(&new_path)
@@ -182,7 +184,7 @@ async fn remove(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // Get file record
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files WHERE id = ?"
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -212,6 +214,64 @@ async fn remove(
                 }),
             )
         })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Requeue a provisional file — reset the linked queue entry to pending and delete the file.
+async fn requeue(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let file: FileEntry = sqlx::query_as(
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Database error: {}", e),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "File not found".to_string(),
+            }),
+        )
+    })?;
+
+    // Delete the file from disk
+    let _ = std::fs::remove_file(&file.path);
+
+    // Delete the file record
+    let _ = sqlx::query("DELETE FROM files WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await;
+
+    // Reset the linked queue entry to pending
+    if let Some(queue_id) = file.queue_id {
+        // Record history
+        let _ = sqlx::query(
+            "INSERT INTO queue_history (queue_id, status, error) VALUES (?, 'requeued', 'Requeued from review — provisional file deleted')",
+        )
+        .bind(queue_id)
+        .execute(&state.db)
+        .await;
+
+        let _ = sqlx::query(
+            "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(queue_id)
+        .execute(&state.db)
+        .await;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -272,7 +332,7 @@ async fn scan(
         let rating = crate::rename::parse_rating(&filename).map(|r| r as i32);
 
         let entry: FileEntry = sqlx::query_as(
-            "INSERT INTO files (filename, original, path, size_bytes, rating) VALUES (?, ?, ?, ?, ?) RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at"
+            "INSERT INTO files (filename, original, path, size_bytes, rating) VALUES (?, ?, ?, ?, ?) RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
         )
         .bind(&filename)
         .bind(&filename)
