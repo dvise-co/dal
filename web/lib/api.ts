@@ -35,6 +35,7 @@ export interface FileEntry {
   category_id: number | null;
   created_at: string;
   rated_at: string | null;
+  exists: boolean;
 }
 
 export interface Category {
@@ -152,6 +153,10 @@ export async function rateFile(
 
 export async function deleteFile(id: number): Promise<void> {
   return fetchJSON(`/files/${id}`, { method: "DELETE" });
+}
+
+export async function scanFiles(): Promise<FileEntry[]> {
+  return fetchJSON("/files/scan", { method: "POST" });
 }
 
 // Categories

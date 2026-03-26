@@ -12,11 +12,12 @@ use sqlx::FromRow;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/files", get(list))
+        .route("/api/files/scan", post(scan))
         .route("/api/files/{id}/rate", post(rate))
         .route("/api/files/{id}", delete(remove))
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromRow, Clone)]
 struct FileEntry {
     id: i64,
     queue_id: Option<i64>,
@@ -30,6 +31,13 @@ struct FileEntry {
     category_id: Option<i64>,
     created_at: Option<String>,
     rated_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FileResponse {
+    #[serde(flatten)]
+    entry: FileEntry,
+    exists: bool,
 }
 
 #[derive(Deserialize)]
@@ -53,7 +61,7 @@ struct ErrorResponse {
 async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
-) -> Result<Json<Vec<FileEntry>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Vec<FileResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
         "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files",
     );
@@ -93,7 +101,15 @@ async fn list(
                 )
             })?;
 
-    Ok(Json(entries))
+    let responses: Vec<FileResponse> = entries
+        .into_iter()
+        .map(|e| {
+            let exists = std::path::Path::new(&e.path).exists();
+            FileResponse { entry: e, exists }
+        })
+        .collect();
+
+    Ok(Json(responses))
 }
 
 async fn rate(
@@ -126,26 +142,21 @@ async fn rate(
         Json(ErrorResponse { error: "File not found".to_string() }),
     ))?;
 
-    // Rename file on disk
-    let download_dir = &state.config.storage.download_dir;
-    let new_filename = rename::apply_rating(
-        std::path::Path::new(download_dir),
-        &file.filename,
-        body.rating,
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Rename error: {}", e),
-            }),
-        )
-    })?;
+    // Rename file on disk — use the file's actual parent directory, not download_dir
+    let file_dir = std::path::Path::new(&file.path)
+        .parent()
+        .unwrap_or(std::path::Path::new(&state.config.storage.download_dir));
+    let new_filename =
+        rename::apply_rating(file_dir, &file.filename, body.rating).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Rename error: {}", e),
+                }),
+            )
+        })?;
 
-    let new_path = std::path::Path::new(download_dir)
-        .join(&new_filename)
-        .to_string_lossy()
-        .to_string();
+    let new_path = file_dir.join(&new_filename).to_string_lossy().to_string();
 
     // Update database
     let updated: FileEntry = sqlx::query_as(
@@ -203,4 +214,83 @@ async fn remove(
         })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Scan the download directory for files not tracked in the database.
+/// Creates DB records for any untracked files found.
+async fn scan(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<FileResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let download_dir = &state.config.storage.download_dir;
+    let mut new_files = Vec::new();
+
+    // Get all known paths from DB
+    let known_paths: Vec<String> = sqlx::query_scalar("SELECT path FROM files")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let known_set: std::collections::HashSet<String> = known_paths.into_iter().collect();
+
+    // Walk the download directory recursively
+    fn walk_dir(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk_dir(&path, files);
+                } else if path.is_file() {
+                    // Skip .part files (incomplete yt-dlp downloads)
+                    if let Some(ext) = path.extension()
+                        && ext == "part"
+                    {
+                        continue;
+                    }
+                    files.push(path);
+                }
+            }
+        }
+    }
+
+    let mut disk_files = Vec::new();
+    walk_dir(std::path::Path::new(download_dir), &mut disk_files);
+
+    for path in disk_files {
+        let path_str = path.to_string_lossy().to_string();
+        if known_set.contains(&path_str) {
+            continue;
+        }
+
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let size_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).ok();
+
+        // Parse existing rating from filename if present
+        let rating = crate::rename::parse_rating(&filename).map(|r| r as i32);
+
+        let entry: FileEntry = sqlx::query_as(
+            "INSERT INTO files (filename, original, path, size_bytes, rating) VALUES (?, ?, ?, ?, ?) RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at"
+        )
+        .bind(&filename)
+        .bind(&filename)
+        .bind(&path_str)
+        .bind(size_bytes)
+        .bind(rating)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Database error: {}", e) }),
+        ))?;
+
+        new_files.push(FileResponse {
+            entry,
+            exists: true,
+        });
+    }
+
+    Ok(Json(new_files))
 }

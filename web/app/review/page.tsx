@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { getFiles, rateFile, deleteFile, getCategories, FileEntry, Category, formatBytes } from "@/lib/api";
+import { getFiles, rateFile, deleteFile, scanFiles, getCategories, FileEntry, Category, formatBytes } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,9 +76,14 @@ export default function ReviewPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Review Files</h1>
-        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={refresh}>
-          Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={async () => { await scanFiles(); await refresh(); }}>
+            Scan Disk
+          </Button>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={refresh}>
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Filter bar */}
@@ -147,12 +152,14 @@ export default function ReviewPage() {
 
             return (
               <div key={file.id} className="rounded border border-border bg-card">
-                {/* Compact row */}
+                {/* Compact row with inline actions */}
                 <div
-                  className="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs"
-                  onClick={() => setExpandedId(isExpanded ? null : file.id)}
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs"
                 >
-                  {/* Rating */}
+                  {/* Exists indicator */}
+                  <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${file.exists ? "bg-green-500" : "bg-red-500"}`} title={file.exists ? "File exists" : "File missing"} />
+
+                  {/* Rating badge */}
                   {file.rating !== null ? (
                     <Badge variant="default" className="text-[10px] px-1.5 py-0 min-w-[28px] justify-center">
                       {file.rating}
@@ -173,49 +180,57 @@ export default function ReviewPage() {
                     </Badge>
                   )}
 
-                  <span className="flex-1 min-w-0 font-mono truncate text-muted-foreground" title={file.filename}>
+                  <span
+                    className="flex-1 min-w-0 font-mono truncate text-muted-foreground cursor-pointer"
+                    title={file.filename}
+                    onClick={() => setExpandedId(isExpanded ? null : file.id)}
+                  >
                     {file.filename}
                   </span>
 
                   <span className="shrink-0 text-muted-foreground">{formatBytes(file.size_bytes)}</span>
 
-                  <span className="text-muted-foreground shrink-0">
+                  {/* Inline rating + actions */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Input
+                      type="number"
+                      min={10}
+                      max={99}
+                      placeholder={file.rating?.toString() || "10-99"}
+                      value={ratingInputs[file.id] ?? ""}
+                      onChange={(e) => setRatingInputs((prev) => ({ ...prev, [file.id]: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleRate(file.id); }}
+                      className="w-14 h-5 text-[10px] text-center"
+                    />
+                    <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleRate(file.id)}>
+                      Rate
+                    </Button>
+                    <Button
+                      variant="ghost" size="sm" className="h-5 text-[10px] px-1.5 text-destructive"
+                      onClick={() => handleDelete(file.id, file.filename)}
+                    >
+                      Del
+                    </Button>
+                  </div>
+
+                  <span
+                    className="text-muted-foreground shrink-0 cursor-pointer"
+                    onClick={() => setExpandedId(isExpanded ? null : file.id)}
+                  >
                     {isExpanded ? "\u25BE" : "\u25B8"}
                   </span>
                 </div>
 
-                {/* Expanded detail */}
+                {/* Expanded detail: path + metadata */}
                 {isExpanded && (
-                  <div className="px-3 pb-3 pt-2 space-y-2 border-t border-border/50 bg-muted/30">
-                    <p className="text-[11px] font-mono text-muted-foreground break-all">{file.path}</p>
-
-                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                  <div className="px-3 pb-2 pt-1.5 border-t border-border/50 bg-muted/30">
+                    <p className="text-[10px] font-mono text-muted-foreground break-all">{file.path}</p>
+                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground mt-1">
                       <span>{formatBytes(file.size_bytes)}</span>
                       {file.duration && <span>{file.duration}</span>}
                       <span>Added: {file.created_at}</span>
                       {file.rated_at && <span>Rated: {file.rated_at}</span>}
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        type="number"
-                        min={10}
-                        max={99}
-                        placeholder={file.rating?.toString() || "10-99"}
-                        value={ratingInputs[file.id] ?? ""}
-                        onChange={(e) => setRatingInputs((prev) => ({ ...prev, [file.id]: e.target.value }))}
-                        onKeyDown={(e) => { if (e.key === "Enter") handleRate(file.id); }}
-                        className="w-16 h-6 text-xs text-center"
-                      />
-                      <Button variant="default" size="sm" className="h-6 text-[11px]" onClick={() => handleRate(file.id)}>
-                        Rate
-                      </Button>
-                      <Button
-                        variant="destructive" size="sm" className="h-6 text-[11px] ml-auto"
-                        onClick={() => handleDelete(file.id, file.filename)}
-                      >
-                        Delete
-                      </Button>
+                      {!file.exists && <span className="text-destructive font-medium">FILE MISSING</span>}
                     </div>
                   </div>
                 )}

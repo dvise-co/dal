@@ -337,25 +337,35 @@ export default function QueuePage() {
                     {entry.url}
                   </span>
 
-                  {/* Inline actions */}
-                  {(entry.status === "completed" || entry.status === "failed") && !entry.archived && (
-                    <Button
-                      variant="ghost" size="sm" className="h-5 text-[10px] px-1.5"
-                      onClick={(e) => { e.stopPropagation(); handleArchive(entry.id); }}
-                    >
-                      Archive
-                    </Button>
-                  )}
-                  {entry.archived && (
-                    <Button
-                      variant="ghost" size="sm" className="h-5 text-[10px] px-1.5"
-                      onClick={(e) => { e.stopPropagation(); handleUnarchive(entry.id); }}
-                    >
-                      Unarchive
-                    </Button>
+                  {entry.error && (
+                    <span className="shrink-0 text-[10px] text-destructive truncate max-w-48" title={entry.error}>{entry.error}</span>
                   )}
 
-                  <span className="text-muted-foreground shrink-0">
+                  {/* Inline actions */}
+                  <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    {entry.status === "pending" && (
+                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleCancel(entry.id)}>
+                        Cancel
+                      </Button>
+                    )}
+                    {entry.status === "failed" && (
+                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleRetry(entry.id)}>
+                        Retry
+                      </Button>
+                    )}
+                    {(entry.status === "completed" || entry.status === "failed") && !entry.archived && (
+                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleArchive(entry.id)}>
+                        Archive
+                      </Button>
+                    )}
+                    {entry.archived && (
+                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleUnarchive(entry.id)}>
+                        Unarchive
+                      </Button>
+                    )}
+                  </div>
+
+                  <span className="text-muted-foreground shrink-0 cursor-pointer">
                     {isExpanded ? "\u25BE" : "\u25B8"}
                   </span>
                 </div>
@@ -367,33 +377,18 @@ export default function QueuePage() {
                   </div>
                 )}
 
-                {/* Expanded detail */}
+                {/* Expanded detail: console log only */}
                 {isExpanded && (
-                  <div className="px-3 pb-3 pt-2 space-y-2 border-t border-border/50 bg-muted/30">
-                    <p className="text-[11px] font-mono text-muted-foreground break-all">{entry.url}</p>
-
-                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                      <span>Queued: {entry.created_at}</span>
-                      {entry.error && <span className="text-destructive">{entry.error}</span>}
-                    </div>
-
-                    <div className="flex gap-1.5">
-                      {entry.status === "pending" && (
-                        <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={(e) => { e.stopPropagation(); handleCancel(entry.id); }}>
-                          Cancel
-                        </Button>
-                      )}
-                      {entry.status === "failed" && (
-                        <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={(e) => { e.stopPropagation(); handleRetry(entry.id); }}>
-                          Retry
-                        </Button>
-                      )}
-                    </div>
-
-                    {outputLines.length > 0 && <LogPanel lines={outputLines} />}
-
+                  <div className="border-t border-border/50 bg-muted/30">
+                    {outputLines.length > 0 ? (
+                      <LogPanel lines={outputLines} />
+                    ) : (
+                      <p className="px-3 py-2 text-[10px] text-muted-foreground">No output yet.</p>
+                    )}
                     {(entry.attempts ?? 0) > 1 && (
-                      <HistoryPanel queueId={entry.id} />
+                      <div className="px-3 pb-2">
+                        <HistoryPanel queueId={entry.id} />
+                      </div>
                     )}
                   </div>
                 )}
