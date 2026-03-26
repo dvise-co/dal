@@ -12,8 +12,10 @@ let listeners: Set<ProgressCallback> = new Set();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getWsUrl(): string {
+  // Connect directly to the Rust API server on port 8550.
+  // Next.js rewrites can't proxy WebSocket upgrades.
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/ws`;
+  return `${proto}//${window.location.hostname}:8550/api/ws`;
 }
 
 function connect() {
