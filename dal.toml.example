@@ -15,6 +15,9 @@ download_dir = "/downloads"
 database = "/data/dal.db"
 # Organize downloads into subdirectories by source hostname
 segment_by_host = true
+# Optional: rewrite displayed file paths (useful when download_dir is a Docker
+# volume mount and you want the UI to show the host path instead)
+# display_path_prefix = "/mnt/media"
 
 [ytdlp]
 # Path to yt-dlp binary

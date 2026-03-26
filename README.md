@@ -11,7 +11,26 @@ A self-hosted content review pipeline: queue video downloads from any browser, r
 
 ## Quick Start
 
-### 1. Rust API Server
+### Docker Compose (recommended)
+
+```bash
+docker compose up -d
+```
+
+All data lives in `.docker/dal/` (config, database, downloads). On first run, `dal.toml` is created from `dal.toml.example`. Edit `.docker/dal/dal.toml` to customize settings, then `docker compose restart dal-api`.
+
+To mount an external volume (e.g. a Samba share) instead of the default downloads directory, create `docker-compose.override.yml`:
+
+```yaml
+services:
+  dal-api:
+    volumes:
+      - /your/samba/share:/downloads
+```
+
+### Manual Setup
+
+#### 1. Rust API Server
 
 ```bash
 cargo build --release
@@ -20,7 +39,7 @@ cargo build --release
 
 The API server starts on port 8550 by default.
 
-### 2. Next.js Frontend
+#### 2. Next.js Frontend
 
 ```bash
 cd web
@@ -38,38 +57,36 @@ npm run build
 npm start
 ```
 
-### 3. Firefox Extension
+#### 3. Firefox Extension
 
 See [Installing the Firefox Extension](#installing-the-firefox-extension) below.
 
 ## Configuration
 
-All server configuration lives in `dal.toml`. If the file is missing, sensible defaults are used.
+All server configuration lives in `dal.toml`. If the file is missing, sensible defaults are used. See `dal.toml.example` for a fully commented reference.
 
 ```toml
 [server]
-# Address to bind to
 host = "0.0.0.0"
-# Port for the API server
 port = 8550
 
 [storage]
-# Directory where yt-dlp saves downloaded files (e.g. Samba share mount)
-download_dir = "/mnt/media/videos"
-# Path to SQLite database file (created automatically)
-database = "/var/lib/dal/dal.db"
-# Organize downloads into subdirectories by source hostname (default: true)
-# When enabled, files are saved to: download_dir/youtube.com/Video.mp4
-# When disabled, all files go into the flat download_dir
+download_dir = "/downloads"
+database = "/data/dal.db"
 segment_by_host = true
+# Optional: rewrite displayed file paths (useful for Docker volume mounts)
+# display_path_prefix = "/mnt/media"
 
 [ytdlp]
-# Path to yt-dlp binary
 binary = "yt-dlp"
-# Number of concurrent downloads (increase for faster throughput)
 max_concurrent = 1
-# Extra arguments passed to every yt-dlp invocation
-extra_args = ["--merge-output-format", "mp4"]
+default_args = [
+  "--newline", "--no-colors", "--verbose",
+  "--progress", "--continue",
+  "--trim-filenames", "150"
+]
+# output_template = "%(uploader)s/%(title)s.%(ext)s"
+extra_args = []
 ```
 
 ### Configuration Reference
@@ -81,9 +98,25 @@ extra_args = ["--merge-output-format", "mp4"]
 | `storage` | `download_dir` | `./downloads` | Where files are saved |
 | `storage` | `database` | `./dal.db` | SQLite database path |
 | `storage` | `segment_by_host` | `true` | Create subdirectories per source hostname |
+| `storage` | `display_path_prefix` | *(none)* | Rewrite displayed paths with this prefix instead of `download_dir` |
 | `ytdlp` | `binary` | `yt-dlp` | Path to yt-dlp binary |
 | `ytdlp` | `max_concurrent` | `1` | Max simultaneous downloads |
-| `ytdlp` | `extra_args` | `["--merge-output-format", "mp4"]` | Extra yt-dlp arguments |
+| `ytdlp` | `default_args` | *(see dal.toml.example)* | Base arguments passed to every yt-dlp invocation |
+| `ytdlp` | `output_template` | *(none)* | Custom yt-dlp output template (overrides default `%(title)s.%(ext)s`) |
+| `ytdlp` | `extra_args` | `[]` | Additional yt-dlp arguments appended after defaults |
+
+### Display Path Prefix
+
+When running in Docker, the container's internal paths (e.g. `/downloads/movies/file.mkv`) don't match the host filesystem. Set `display_path_prefix` to show paths as they appear on the host:
+
+```toml
+[storage]
+download_dir = "/downloads"
+display_path_prefix = "/mnt/media"
+# /downloads/movies/file.mkv → displays as /mnt/media/movies/file.mkv
+```
+
+File paths are stored as relative paths in the database (e.g. `movies/file.mkv`), making the database portable across environments.
 
 ### Common yt-dlp Extra Arguments
 
@@ -99,9 +132,6 @@ extra_args = ["--cookies-from-browser", "firefox"]
 
 # Limit download speed
 extra_args = ["--ratelimit", "5M"]
-
-# Bypass geo restrictions
-extra_args = ["--geo-bypass"]
 
 # Combine multiple options
 extra_args = [
@@ -196,16 +226,46 @@ Then either:
 
 ## API Endpoints
 
+### Health & WebSocket
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
+| GET | `/api/ws` | WebSocket for real-time download progress |
+
+### Queue
+
+| Method | Path | Description |
+|--------|------|-------------|
 | POST | `/api/queue` | Queue a URL for download |
-| GET | `/api/queue` | List queue entries |
-| DELETE | `/api/queue/:id` | Cancel a pending download |
-| GET | `/api/files` | List downloaded files |
-| POST | `/api/files/:id/rate` | Rate a file (10-99) |
-| DELETE | `/api/files/:id` | Delete a file |
-| GET | `/api/ws` | WebSocket for download progress |
+| GET | `/api/queue` | List queue entries (filter: `status`, `archived`, `include_archived`) |
+| PUT | `/api/queue/reorder` | Reorder queue entries |
+| POST | `/api/queue/archive-all` | Archive all completed/failed items |
+| POST | `/api/queue/retry-all` | Retry all failed items |
+| DELETE | `/api/queue/{id}` | Cancel a pending download |
+| POST | `/api/queue/{id}/archive` | Archive a single entry |
+| POST | `/api/queue/{id}/unarchive` | Unarchive a single entry |
+| POST | `/api/queue/{id}/retry` | Retry a failed or completed entry |
+| GET | `/api/queue/{id}/history` | Get retry/status history |
+
+### Files
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/files` | List files (filter: `unrated`, `incomplete`, `category_id`; sort: `created_at`, `rating`, `name`) |
+| POST | `/api/files/scan` | Scan download directory for untracked files |
+| POST | `/api/files/{id}/rate` | Rate a file (10-99) |
+| POST | `/api/files/{id}/requeue` | Requeue a provisional file (deletes file, resets queue entry) |
+| DELETE | `/api/files/{id}` | Delete a file from disk and database |
+
+### Categories
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/categories` | List all categories |
+| POST | `/api/categories` | Create a category |
+| PUT | `/api/categories/{id}` | Rename a category |
+| DELETE | `/api/categories/{id}` | Delete a category |
 
 ### Queue a URL
 
@@ -214,6 +274,11 @@ Then either:
 curl -X POST http://localhost:8550/api/queue \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+# With a category
+curl -X POST http://localhost:8550/api/queue \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "category_id": 1}'
 
 # Force re-download of a previously queued URL
 curl -X POST http://localhost:8550/api/queue \
@@ -229,21 +294,3 @@ Two processes:
 - **Next.js** (port 3000): SSR web UI with Tailwind, proxies `/api/*` to Rust
 
 Files are stored on a Samba share and accessed directly by clients — no video streaming through the server.
-
-## Docker Compose
-
-```yaml
-services:
-  dal-api:
-    build: .
-    ports: ["8550:8550"]
-    volumes:
-      - /mnt/media/videos:/mnt/media/videos
-      - ./data:/var/lib/dal
-  dal-web:
-    build: ./web
-    ports: ["3000:3000"]
-    environment:
-      - NEXT_TELEMETRY_DISABLED=1
-      - DAL_API_URL=http://dal-api:8550
-```
