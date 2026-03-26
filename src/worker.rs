@@ -391,6 +391,7 @@ async fn handle_success(
             .to_string_lossy()
             .to_string();
         let size_bytes = std::fs::metadata(filepath).map(|m| m.len() as i64).ok();
+        let relative = state.config.storage.to_relative_path(filepath);
 
         let _ = sqlx::query(
             "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id, provisional) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -398,7 +399,7 @@ async fn handle_success(
         .bind(queue_id)
         .bind(&filename)
         .bind(&filename)
-        .bind(filepath)
+        .bind(&relative)
         .bind(size_bytes)
         .bind(category_id)
         .bind(provisional)
@@ -436,13 +437,17 @@ async fn handle_failure(
         let incomplete_path = file_dir.join(&incomplete_name);
 
         if let Ok(()) = std::fs::rename(filepath, &incomplete_path) {
+            let relative = state
+                .config
+                .storage
+                .to_relative_path(&incomplete_path.to_string_lossy());
             let _ = sqlx::query(
                 "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
             )
             .bind(queue_id)
             .bind(&incomplete_name)
             .bind(&filename)
-            .bind(incomplete_path.to_string_lossy().as_ref())
+            .bind(&relative)
             .bind(meta.len() as i64)
             .bind(category_id)
             .execute(&state.db)

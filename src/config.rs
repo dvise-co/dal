@@ -56,20 +56,38 @@ impl Default for StorageConfig {
 }
 
 impl StorageConfig {
-    /// Rewrites a filesystem path for display by stripping the `download_dir`
-    /// prefix and prepending the configured `display_path_prefix`.
-    /// Returns the path unchanged when no prefix is configured.
-    pub fn display_path(&self, path: &str) -> String {
-        match &self.display_path_prefix {
-            Some(prefix) => {
-                let stripped = path
-                    .strip_prefix(&self.download_dir)
-                    .unwrap_or(path)
-                    .trim_start_matches('/');
-                format!("{}/{}", prefix.trim_end_matches('/'), stripped)
-            }
-            None => path.to_string(),
-        }
+    /// Converts a relative path (as stored in the DB) to a full filesystem path
+    /// by joining it with `download_dir`.
+    pub fn full_path(&self, relative_path: &str) -> String {
+        format!(
+            "{}/{}",
+            self.download_dir.trim_end_matches('/'),
+            relative_path.trim_start_matches('/')
+        )
+    }
+
+    /// Strips the `download_dir` prefix from an absolute path to produce
+    /// the relative path suitable for database storage.
+    pub fn to_relative_path(&self, absolute_path: &str) -> String {
+        absolute_path
+            .strip_prefix(self.download_dir.trim_end_matches('/'))
+            .unwrap_or(absolute_path)
+            .trim_start_matches('/')
+            .to_string()
+    }
+
+    /// Builds a display path from a relative DB path. Uses `display_path_prefix`
+    /// if configured, otherwise falls back to `download_dir`.
+    pub fn display_path(&self, relative_path: &str) -> String {
+        let prefix = self
+            .display_path_prefix
+            .as_deref()
+            .unwrap_or(&self.download_dir);
+        format!(
+            "{}/{}",
+            prefix.trim_end_matches('/'),
+            relative_path.trim_start_matches('/')
+        )
     }
 }
 
@@ -181,6 +199,42 @@ mod tests {
     }
 
     #[test]
+    fn test_full_path() {
+        let storage = StorageConfig {
+            download_dir: "/data".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage.full_path("movies/file.mkv"),
+            "/data/movies/file.mkv"
+        );
+    }
+
+    #[test]
+    fn test_to_relative_path() {
+        let storage = StorageConfig {
+            download_dir: "/data".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage.to_relative_path("/data/movies/file.mkv"),
+            "movies/file.mkv"
+        );
+    }
+
+    #[test]
+    fn test_to_relative_path_already_relative() {
+        let storage = StorageConfig {
+            download_dir: "/data".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage.to_relative_path("movies/file.mkv"),
+            "movies/file.mkv"
+        );
+    }
+
+    #[test]
     fn test_display_path_with_prefix() {
         let storage = StorageConfig {
             download_dir: "/data".to_string(),
@@ -188,17 +242,20 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            storage.display_path("/data/movies/file.mkv"),
+            storage.display_path("movies/file.mkv"),
             "/mnt/media/movies/file.mkv"
         );
     }
 
     #[test]
     fn test_display_path_without_prefix() {
-        let storage = StorageConfig::default();
+        let storage = StorageConfig {
+            download_dir: "/data".to_string(),
+            ..Default::default()
+        };
         assert_eq!(
-            storage.display_path("./downloads/movies/file.mkv"),
-            "./downloads/movies/file.mkv"
+            storage.display_path("movies/file.mkv"),
+            "/data/movies/file.mkv"
         );
     }
 
@@ -210,7 +267,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            storage.display_path("/data/movies/file.mkv"),
+            storage.display_path("movies/file.mkv"),
             "/mnt/media/movies/file.mkv"
         );
     }

@@ -49,6 +49,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize database
     let pool = db::init_db(&config.storage.database).await?;
 
+    // Migrate any absolute paths in the files table to relative paths
+    migrate_to_relative_paths(&pool, &config.storage).await;
+
     // Reset any interrupted downloads from previous run
     worker::reset_interrupted_downloads(&pool).await;
 
@@ -90,4 +93,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("DAL server stopped");
     std::process::exit(0);
+}
+
+/// Migrate existing absolute paths to relative paths by stripping known prefixes.
+/// Handles both download_dir and display_path_prefix in case either leaked into the DB.
+async fn migrate_to_relative_paths(db: &sqlx::SqlitePool, storage: &config::StorageConfig) {
+    let mut prefixes = vec![storage.download_dir.clone()];
+    if let Some(ref display) = storage.display_path_prefix {
+        prefixes.push(display.clone());
+    }
+
+    let mut total = 0u64;
+    for raw_prefix in &prefixes {
+        let prefix = format!("{}/", raw_prefix.trim_end_matches('/'));
+        let pattern = format!("{}%", prefix);
+
+        match sqlx::query("UPDATE files SET path = SUBSTR(path, ?) WHERE path LIKE ?")
+            .bind(prefix.len() as i64 + 1) // SUBSTR is 1-indexed
+            .bind(&pattern)
+            .execute(db)
+            .await
+        {
+            Ok(r) => total += r.rows_affected(),
+            Err(e) => {
+                tracing::error!(
+                    "Failed to migrate file paths for prefix '{}': {}",
+                    prefix,
+                    e
+                );
+            }
+        }
+    }
+
+    if total > 0 {
+        tracing::info!("Migrated {} file paths from absolute to relative", total);
+    }
 }

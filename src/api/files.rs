@@ -104,11 +104,13 @@ async fn list(
                 )
             })?;
 
+    let storage = &state.config.storage;
     let responses: Vec<FileResponse> = entries
         .into_iter()
         .map(|e| {
-            let exists = std::path::Path::new(&e.path).exists();
-            let display_path = state.config.storage.display_path(&e.path);
+            let full = storage.full_path(&e.path);
+            let exists = std::path::Path::new(&full).exists();
+            let display_path = storage.display_path(&e.path);
             FileResponse {
                 entry: e,
                 display_path,
@@ -150,8 +152,9 @@ async fn rate(
         Json(ErrorResponse { error: "File not found".to_string() }),
     ))?;
 
-    // Rename file on disk — use the file's actual parent directory, not download_dir
-    let file_dir = std::path::Path::new(&file.path)
+    // Resolve full filesystem path for disk rename
+    let full_path = state.config.storage.full_path(&file.path);
+    let file_dir = std::path::Path::new(&full_path)
         .parent()
         .unwrap_or(std::path::Path::new(&state.config.storage.download_dir));
     let new_filename =
@@ -164,14 +167,16 @@ async fn rate(
             )
         })?;
 
-    let new_path = file_dir.join(&new_filename).to_string_lossy().to_string();
+    // Store relative path in DB
+    let new_full = file_dir.join(&new_filename).to_string_lossy().to_string();
+    let new_relative = state.config.storage.to_relative_path(&new_full);
 
     // Update database
     let updated: FileEntry = sqlx::query_as(
         "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
     )
     .bind(&new_filename)
-    .bind(&new_path)
+    .bind(&new_relative)
     .bind(body.rating as i32)
     .bind(id)
     .fetch_one(&state.db)
@@ -205,7 +210,8 @@ async fn remove(
     ))?;
 
     // Delete file from disk (ignore if already missing)
-    let _ = std::fs::remove_file(&file.path);
+    let full_path = state.config.storage.full_path(&file.path);
+    let _ = std::fs::remove_file(&full_path);
 
     // Delete from database
     sqlx::query("DELETE FROM files WHERE id = ?")
@@ -253,7 +259,8 @@ async fn requeue(
     })?;
 
     // Delete the file from disk
-    let _ = std::fs::remove_file(&file.path);
+    let full_path = state.config.storage.full_path(&file.path);
+    let _ = std::fs::remove_file(&full_path);
 
     // Delete the file record
     let _ = sqlx::query("DELETE FROM files WHERE id = ?")
@@ -321,9 +328,12 @@ async fn scan(
     let mut disk_files = Vec::new();
     walk_dir(std::path::Path::new(download_dir), &mut disk_files);
 
+    let storage = &state.config.storage;
+
     for path in disk_files {
         let path_str = path.to_string_lossy().to_string();
-        if known_set.contains(&path_str) {
+        let relative = storage.to_relative_path(&path_str);
+        if known_set.contains(&relative) {
             continue;
         }
 
@@ -342,7 +352,7 @@ async fn scan(
         )
         .bind(&filename)
         .bind(&filename)
-        .bind(&path_str)
+        .bind(&relative)
         .bind(size_bytes)
         .bind(rating)
         .fetch_one(&state.db)
@@ -352,7 +362,7 @@ async fn scan(
             Json(ErrorResponse { error: format!("Database error: {}", e) }),
         ))?;
 
-        let display_path = state.config.storage.display_path(&entry.path);
+        let display_path = storage.display_path(&entry.path);
         new_files.push(FileResponse {
             entry,
             display_path,
