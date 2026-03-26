@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio::io::AsyncBufReadExt;
 use tokio::sync::broadcast;
 
 use crate::AppState;
@@ -108,21 +107,25 @@ async fn download_item(
     let _ = std::fs::create_dir_all(&base);
     let output_template = format!("{}/%(title)s.%(ext)s", base.display());
 
-    let mut cmd = tokio::process::Command::new(&state.config.ytdlp.binary);
-    cmd.arg("--newline")
-        .arg("--continue")
-        .arg("--print").arg("after_move:filepath")
-        .arg("-o").arg(&output_template);
+    // Use PTY to capture output — yt-dlp behaves like it's in a terminal
+    // (proper line buffering, progress output, color codes stripped by --newline)
+    let pty = portable_pty::native_pty_system();
+    let pty_pair = pty.openpty(portable_pty::PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    }).expect("failed to open pty");
 
+    let mut pty_cmd = portable_pty::CommandBuilder::new(&state.config.ytdlp.binary);
+    pty_cmd.args(["--newline", "--continue", "--print", "after_move:filepath"]);
+    pty_cmd.args(["-o", &output_template]);
     for arg in &state.config.ytdlp.extra_args {
-        cmd.arg(arg);
+        pty_cmd.arg(arg);
     }
+    pty_cmd.arg(url);
 
-    cmd.arg(url)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = match cmd.spawn() {
+    let mut pty_child = match pty_pair.slave.spawn_command(pty_cmd) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to spawn yt-dlp for queue {}: {}", queue_id, e);
@@ -140,76 +143,101 @@ async fn download_item(
             return;
         }
     };
+    // Drop the slave so reads on the master will see EOF when the child exits
+    drop(pty_pair.slave);
 
-    // Stream stderr in a separate task
-    let stderr = child.stderr.take().unwrap();
-    let stderr_tx = tx.clone();
-    let stderr_queue_id = queue_id;
-    tokio::spawn(async move {
-        let mut reader = tokio::io::BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            let line = line.trim().to_string();
-            if line.is_empty() { continue; }
-            let _ = stderr_tx.send(ProgressUpdate {
-                queue_id: stderr_queue_id,
-                progress: String::new(),
-                status: "downloading".to_string(),
-                output: Some(line),
-            });
-        }
-    });
-
-    // Parse stdout for progress, output lines, and final filepath
-    let stdout = child.stdout.take().unwrap();
-    let mut reader = tokio::io::BufReader::new(stdout).lines();
+    // Read from PTY master in a blocking thread (PTY reads are blocking)
+    let reader = pty_pair.master.try_clone_reader().expect("failed to clone pty reader");
+    let pty_tx = tx.clone();
+    let pty_db = state.db.clone();
+    let pty_queue_id = queue_id;
     let mut final_filepath: Option<String> = None;
 
-    while let Ok(Some(line)) = reader.next_line().await {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
+    let read_handle = tokio::task::spawn_blocking(move || {
+        let mut buf_reader = std::io::BufReader::new(reader);
+        let mut line_buf = String::new();
+        let mut filepath: Option<String> = None;
 
-        // yt-dlp --print after_move:filepath outputs the final path as the last line
-        // Progress lines look like: [download]  45.2% of ~50.00MiB at  5.00MiB/s ETA 00:05
-        if line.starts_with("[download]") {
-            if let Some(pct) = parse_progress(&line) {
-                let _ = sqlx::query("UPDATE queue SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .bind(&pct)
-                    .bind(queue_id)
-                    .execute(&state.db)
-                    .await;
-                let _ = tx.send(ProgressUpdate {
-                    queue_id,
-                    progress: pct,
+        loop {
+            line_buf.clear();
+            // Read raw bytes, splitting on \n (PTY converts \r\n)
+            let mut byte = [0u8; 1];
+            loop {
+                match std::io::Read::read(&mut buf_reader, &mut byte) {
+                    Ok(0) => return filepath, // EOF
+                    Ok(_) => {
+                        let ch = byte[0] as char;
+                        if ch == '\n' {
+                            break;
+                        } else if ch == '\r' {
+                            // Treat \r as line break too (progress lines)
+                            if !line_buf.is_empty() {
+                                break;
+                            }
+                        } else {
+                            line_buf.push(ch);
+                        }
+                    }
+                    Err(_) => return filepath, // Read error = done
+                }
+            }
+
+            let line = line_buf.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+
+            if line.starts_with("[download]") {
+                if let Some(pct) = parse_progress(&line) {
+                    // Update DB progress (blocking context, use Handle)
+                    let db = pty_db.clone();
+                    let pct_clone = pct.clone();
+                    let _ = tokio::runtime::Handle::current().block_on(async {
+                        sqlx::query("UPDATE queue SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                            .bind(&pct_clone)
+                            .bind(pty_queue_id)
+                            .execute(&db)
+                            .await
+                    });
+                    let _ = pty_tx.send(ProgressUpdate {
+                        queue_id: pty_queue_id,
+                        progress: pct,
+                        status: "downloading".to_string(),
+                        output: Some(line),
+                    });
+                } else {
+                    let _ = pty_tx.send(ProgressUpdate {
+                        queue_id: pty_queue_id,
+                        progress: String::new(),
+                        status: "downloading".to_string(),
+                        output: Some(line),
+                    });
+                }
+            } else if line.starts_with('[') || line.starts_with("WARNING") || line.starts_with("ERROR") {
+                let _ = pty_tx.send(ProgressUpdate {
+                    queue_id: pty_queue_id,
+                    progress: String::new(),
                     status: "downloading".to_string(),
                     output: Some(line),
                 });
             } else {
-                // Non-progress download line (e.g. "Destination: ...")
-                let _ = tx.send(ProgressUpdate {
-                    queue_id,
+                // Lines without brackets are likely the --print output (final filepath)
+                filepath = Some(line.clone());
+                let _ = pty_tx.send(ProgressUpdate {
+                    queue_id: pty_queue_id,
                     progress: String::new(),
                     status: "downloading".to_string(),
                     output: Some(line),
                 });
             }
-        } else if line.starts_with('[') {
-            // Other yt-dlp status lines like [info], [ExtractAudio], [Merger], etc.
-            let _ = tx.send(ProgressUpdate {
-                queue_id,
-                progress: String::new(),
-                status: "downloading".to_string(),
-                output: Some(line),
-            });
-        } else {
-            // Lines without brackets are likely the --print output (final filepath)
-            final_filepath = Some(line);
         }
-    }
+    });
 
-    // Wait for process to exit
-    let status = child.wait().await;
+    // Wait for both the reader and the child process
+    if let Ok(fp) = read_handle.await {
+        final_filepath = fp;
+    }
+    let status = pty_child.wait();
 
     match status {
         Ok(exit) if exit.success() => {
