@@ -7,6 +7,8 @@ RUN npm ci
 
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+ARG DAL_API_URL=http://dal-api:8550
+ENV DAL_API_URL=$DAL_API_URL
 RUN npm run build
 
 # --- Runtime stage ---
