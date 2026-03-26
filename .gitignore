@@ -9,6 +9,11 @@ web/node_modules/
 web/.next/
 web/out/
 
+# Config & local data
+dal.toml
+.docker/
+docker-compose.override.yml
+
 # Environment
 .env
 .env.local

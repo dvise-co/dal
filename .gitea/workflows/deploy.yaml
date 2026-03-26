@@ -13,6 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Initialize .docker config
+        run: |
+          mkdir -p .docker/dal/data .docker/dal/downloads
+          if [ ! -f .docker/dal/dal.toml ]; then
+            echo "First run — creating .docker/dal/dal.toml from example"
+            cp dal.toml.example .docker/dal/dal.toml
+          fi
+
       - name: Build and restart containers
         run: |
           docker compose build --no-cache

@@ -5,10 +5,14 @@ host = "0.0.0.0"
 port = 8550
 
 [storage]
-# Directory where yt-dlp saves downloaded files (e.g. Samba share mount)
-download_dir = "/mnt/media/videos"
-# Path to SQLite database file (created automatically)
-database = "/var/lib/dal/dal.db"
+# Directory where yt-dlp saves downloaded files.
+# Docker: maps to the host path mounted at /downloads in docker-compose.yml
+# Direct: set to your actual path (e.g. /Volumes/system/cache/dal)
+download_dir = "/downloads"
+# Path to SQLite database file (created automatically).
+# Docker: persists in .docker/data/
+# Direct: set to your preferred location (e.g. ~/.dal/dal.db)
+database = "/data/dal.db"
 # Organize downloads into subdirectories by source hostname
 segment_by_host = true
 
@@ -19,7 +23,6 @@ binary = "yt-dlp"
 max_concurrent = 1
 
 # Default arguments passed to yt-dlp before any extras.
-# These control yt-dlp's behavior. Modify or remove as needed.
 # --newline        progress on new lines (required for progress parsing)
 # --no-colors      strip ANSI color codes from output
 # --verbose        log extraction steps (recommended — some sites are silent without it)
