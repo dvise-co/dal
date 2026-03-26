@@ -8,7 +8,7 @@ export interface ProgressUpdate {
 type ProgressCallback = (update: ProgressUpdate) => void;
 
 let socket: WebSocket | null = null;
-let listeners: Set<ProgressCallback> = new Set();
+const listeners: Set<ProgressCallback> = new Set();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getWsUrl(): string {

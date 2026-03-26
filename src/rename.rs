@@ -30,25 +30,31 @@ pub fn strip_prefix(filename: &str) -> &str {
 }
 
 /// Parse a rating from a filename, if present
+#[allow(dead_code)]
 pub fn parse_rating(filename: &str) -> Option<u32> {
     if let Some(pos) = filename.find(SEPARATOR) {
         let prefix = &filename[..pos];
-        if let Ok(rating) = prefix.parse::<u32>() {
-            if (10..=99).contains(&rating) {
-                return Some(rating);
-            }
+        if let Ok(rating) = prefix.parse::<u32>()
+            && (10..=99).contains(&rating)
+        {
+            return Some(rating);
         }
     }
     None
 }
 
 /// Check if a filename has the INCOMPLETE prefix
+#[allow(dead_code)]
 pub fn is_incomplete(filename: &str) -> bool {
     filename.starts_with(&format!("{}{}", INCOMPLETE_PREFIX, SEPARATOR))
 }
 
 /// Rename a file on disk to apply a rating. Returns the new filename.
-pub fn apply_rating(dir: &Path, current_filename: &str, rating: u32) -> Result<String, RenameError> {
+pub fn apply_rating(
+    dir: &Path,
+    current_filename: &str,
+    rating: u32,
+) -> Result<String, RenameError> {
     let new_filename = rated_filename(current_filename, rating)?;
     let old_path = dir.join(current_filename);
     let new_path = dir.join(&new_filename);
@@ -94,12 +100,18 @@ mod tests {
 
     #[test]
     fn test_rated_filename_strips_existing_rating() {
-        assert_eq!(rated_filename("50 - Video.mp4", 85).unwrap(), "85 - Video.mp4");
+        assert_eq!(
+            rated_filename("50 - Video.mp4", 85).unwrap(),
+            "85 - Video.mp4"
+        );
     }
 
     #[test]
     fn test_rated_filename_strips_incomplete() {
-        assert_eq!(rated_filename("INCOMPLETE - Video.mp4", 75).unwrap(), "75 - Video.mp4");
+        assert_eq!(
+            rated_filename("INCOMPLETE - Video.mp4", 75).unwrap(),
+            "75 - Video.mp4"
+        );
     }
 
     #[test]
@@ -116,7 +128,10 @@ mod tests {
 
     #[test]
     fn test_incomplete_filename_strips_existing() {
-        assert_eq!(incomplete_filename("85 - Video.mp4"), "INCOMPLETE - Video.mp4");
+        assert_eq!(
+            incomplete_filename("85 - Video.mp4"),
+            "INCOMPLETE - Video.mp4"
+        );
     }
 
     #[test]

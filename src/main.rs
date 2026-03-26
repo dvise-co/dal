@@ -84,10 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     cancel.cancel();
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        worker_handle,
-    ).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), worker_handle).await;
 
     worker::reset_interrupted_downloads(&state.db).await;
 

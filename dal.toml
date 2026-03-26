@@ -10,19 +10,39 @@ download_dir = "/mnt/media/videos"
 # Path to SQLite database file (created automatically)
 database = "/var/lib/dal/dal.db"
 # Organize downloads into subdirectories by source hostname
-# e.g. /mnt/media/videos/youtube.com/Video.mp4
 segment_by_host = true
 
 [ytdlp]
 # Path to yt-dlp binary
 binary = "yt-dlp"
-# Number of concurrent downloads (increase for faster throughput)
+# Number of concurrent downloads
 max_concurrent = 1
-# Extra arguments passed to every yt-dlp invocation
-# Common options:
-#   --merge-output-format mp4    — always output mp4
-#   --format bestvideo+bestaudio — best quality
-#   --cookies-from-browser firefox — use browser cookies for auth
-#   --ratelimit 5M               — limit download speed
-#   --geo-bypass                  — bypass geo restrictions
-extra_args = ["--merge-output-format", "mp4"]
+
+# Default arguments passed to yt-dlp before any extras.
+# These control yt-dlp's behavior. Modify or remove as needed.
+# --newline        progress on new lines (required for progress parsing)
+# --no-colors      strip ANSI color codes from output
+# --verbose        log extraction steps (recommended — some sites are silent without it)
+# --progress       show download progress
+# --continue       resume partially downloaded files
+# --trim-filenames 150  truncate filenames to prevent filesystem errors
+default_args = [
+  "--newline",
+  "--no-colors",
+  "--verbose",
+  "--progress",
+  "--continue",
+  "--trim-filenames", "150"
+]
+
+# Custom output template (overrides default yt-dlp naming)
+# If not set, yt-dlp uses: %(title)s.%(ext)s
+# output_template = "%(uploader)s/%(title)s.%(ext)s"
+
+# Additional arguments appended after default_args.
+# Use this for format selection, cookies, rate limiting, etc.
+#   --merge-output-format mp4     — always output mp4
+#   --format bestvideo+bestaudio  — best quality
+#   --cookies-from-browser firefox — use browser cookies
+#   --ratelimit 5M                — limit download speed
+extra_args = []

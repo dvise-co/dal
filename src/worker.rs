@@ -20,7 +20,9 @@ pub fn spawn_worker(
     progress_tx: broadcast::Sender<ProgressUpdate>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(state.config.ytdlp.max_concurrent));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(
+        state.config.ytdlp.max_concurrent,
+    ));
 
     tokio::spawn(async move {
         loop {
@@ -85,10 +87,12 @@ async fn download_item(
     tracing::info!("Starting download for queue {} url={}", queue_id, url);
 
     // Mark as downloading
-    if let Err(e) = sqlx::query("UPDATE queue SET status = 'downloading', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(queue_id)
-        .execute(&state.db)
-        .await
+    if let Err(e) = sqlx::query(
+        "UPDATE queue SET status = 'downloading', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .bind(queue_id)
+    .execute(&state.db)
+    .await
     {
         tracing::error!("Failed to update queue status for {}: {}", queue_id, e);
         return;
@@ -118,17 +122,29 @@ async fn download_item(
         base.push(&host);
     }
     let _ = std::fs::create_dir_all(&base);
-    // Limit title to 150 bytes to avoid filesystem filename length limits (255 bytes)
-    let output_template = format!("{}/%(title).150B.%(ext)s", base.display());
 
-    let mut cmd = tokio::process::Command::new(&state.config.ytdlp.binary);
-    cmd.arg("--newline")
-        .arg("--no-colors")
-        .arg("--verbose")
-        .arg("--continue")
-        .arg("--print").arg("after_move:filepath")
-        .arg("-o").arg(&output_template);
-    for arg in &state.config.ytdlp.extra_args {
+    let ytdlp = &state.config.ytdlp;
+
+    let output_template = match &ytdlp.output_template {
+        Some(tpl) => format!("{}/{}", base.display(), tpl),
+        None => format!("{}/%(title)s.%(ext)s", base.display()),
+    };
+
+    let mut cmd = tokio::process::Command::new(&ytdlp.binary);
+
+    // Default args from config (e.g. --newline, --verbose, --continue)
+    for arg in &ytdlp.default_args {
+        cmd.arg(arg);
+    }
+
+    // Internal flags required for the worker
+    cmd.arg("--print")
+        .arg("after_move:filepath")
+        .arg("-o")
+        .arg(&output_template);
+
+    // Extra args from config
+    for arg in &ytdlp.extra_args {
         cmd.arg(arg);
     }
     cmd.arg(url)
@@ -136,7 +152,12 @@ async fn download_item(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    tracing::debug!("Spawning yt-dlp for queue {}: {} -o {}", queue_id, &state.config.ytdlp.binary, &output_template);
+    tracing::debug!(
+        "Spawning yt-dlp for queue {}: {} -o {}",
+        queue_id,
+        &state.config.ytdlp.binary,
+        &output_template
+    );
 
     let mut child = match cmd.spawn() {
         Ok(c) => {
@@ -171,16 +192,22 @@ async fn download_item(
         let mut reader = tokio::io::BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             let line = line.trim().to_string();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             tracing::info!("yt-dlp stderr [{}]: {}", stderr_queue_id, &line);
             let mut log = stderr_output_clone.lock().await;
-            if !log.is_empty() { log.push('\n'); }
+            if !log.is_empty() {
+                log.push('\n');
+            }
             log.push_str(&line);
-            let _ = sqlx::query("UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(log.as_str())
-                .bind(stderr_queue_id)
-                .execute(&db_stderr)
-                .await;
+            let _ = sqlx::query(
+                "UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            )
+            .bind(log.as_str())
+            .bind(stderr_queue_id)
+            .execute(&db_stderr)
+            .await;
             let _ = stderr_tx.send(ProgressUpdate {
                 queue_id: stderr_queue_id,
                 progress: String::new(),
@@ -209,10 +236,8 @@ async fn download_item(
 
                         // Trim to last 200 lines
                         let line_count = output_log.chars().filter(|c| *c == '\n').count();
-                        if line_count > 200 {
-                            if let Some(pos) = output_log.find('\n') {
-                                output_log = output_log[pos + 1..].to_string();
-                            }
+                        if line_count > 200 && let Some(pos) = output_log.find('\n') {
+                            output_log = output_log[pos + 1..].to_string();
                         }
 
                         if line.starts_with("[download]") {
@@ -269,19 +294,28 @@ async fn download_item(
     {
         let stderr_log = stderr_output.lock().await;
         if !stderr_log.is_empty() {
-            if !output_log.is_empty() { output_log.push('\n'); }
+            if !output_log.is_empty() {
+                output_log.push('\n');
+            }
             output_log.push_str(&stderr_log);
-            let _ = sqlx::query("UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(&output_log)
-                .bind(queue_id)
-                .execute(&state.db)
-                .await;
+            let _ = sqlx::query(
+                "UPDATE queue SET output = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            )
+            .bind(&output_log)
+            .bind(queue_id)
+            .execute(&state.db)
+            .await;
         }
     }
 
     let _ = stderr_handle.await;
     let status = child.wait().await;
-    tracing::info!("yt-dlp exited for queue {}: {:?}, filepath={:?}", queue_id, status, final_filepath);
+    tracing::info!(
+        "yt-dlp exited for queue {}: {:?}, filepath={:?}",
+        queue_id,
+        status,
+        final_filepath
+    );
 
     match status {
         Ok(exit) if exit.success() => {
@@ -293,7 +327,6 @@ async fn download_item(
     }
 }
 
-
 async fn handle_success(
     state: &AppState,
     queue_id: i64,
@@ -302,7 +335,11 @@ async fn handle_success(
 ) {
     if let Some(ref filepath) = final_filepath {
         let path = std::path::Path::new(filepath);
-        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let size_bytes = std::fs::metadata(filepath).map(|m| m.len() as i64).ok();
 
         let _ = sqlx::query(
@@ -333,31 +370,38 @@ async fn handle_failure(
     final_filepath: Option<String>,
     download_dir: &str,
 ) {
-    if let Some(ref filepath) = final_filepath {
-        if let Ok(meta) = std::fs::metadata(filepath) {
-            if meta.len() > 1_000_000 {
-                let path = std::path::Path::new(filepath);
-                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                let incomplete_name = rename::incomplete_filename(&filename);
-                let file_dir = path.parent().unwrap_or(std::path::Path::new(download_dir));
-                let incomplete_path = file_dir.join(&incomplete_name);
+    if let Some(ref filepath) = final_filepath
+        && let Ok(meta) = std::fs::metadata(filepath)
+        && meta.len() > 1_000_000
+    {
+        let path = std::path::Path::new(filepath);
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let incomplete_name = rename::incomplete_filename(&filename);
+        let file_dir = path.parent().unwrap_or(std::path::Path::new(download_dir));
+        let incomplete_path = file_dir.join(&incomplete_name);
 
-                if let Ok(()) = std::fs::rename(filepath, &incomplete_path) {
-                    let _ = sqlx::query(
-                        "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
-                    )
-                    .bind(queue_id)
-                    .bind(&incomplete_name)
-                    .bind(&filename)
-                    .bind(incomplete_path.to_string_lossy().as_ref())
-                    .bind(meta.len() as i64)
-                    .bind(category_id)
-                    .execute(&state.db)
-                    .await;
+        if let Ok(()) = std::fs::rename(filepath, &incomplete_path) {
+            let _ = sqlx::query(
+                "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            .bind(queue_id)
+            .bind(&incomplete_name)
+            .bind(&filename)
+            .bind(incomplete_path.to_string_lossy().as_ref())
+            .bind(meta.len() as i64)
+            .bind(category_id)
+            .execute(&state.db)
+            .await;
 
-                    tracing::warn!("Download failed for queue {} but saved as incomplete: {}", queue_id, incomplete_name);
-                }
-            }
+            tracing::warn!(
+                "Download failed for queue {} but saved as incomplete: {}",
+                queue_id,
+                incomplete_name
+            );
         }
     }
 
@@ -369,17 +413,18 @@ async fn handle_failure(
     tracing::error!("Download failed for queue {}", queue_id);
 }
 
+#[allow(dead_code)]
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
-            if let Some(next) = chars.next() {
-                if next == '[' {
-                    for c in chars.by_ref() {
-                        if c.is_ascii_alphabetic() {
-                            break;
-                        }
+            if let Some(next) = chars.next()
+                && next == '['
+            {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
                     }
                 }
             }
@@ -415,7 +460,10 @@ pub async fn reset_interrupted_downloads(db: &sqlx::SqlitePool) {
 
     match result {
         Ok(r) if r.rows_affected() > 0 => {
-            tracing::info!("Reset {} interrupted downloads to pending", r.rows_affected());
+            tracing::info!(
+                "Reset {} interrupted downloads to pending",
+                r.rows_affected()
+            );
         }
         Ok(_) => {}
         Err(e) => {
@@ -450,15 +498,27 @@ mod tests {
 
     #[test]
     fn test_parse_host() {
-        assert_eq!(parse_host("https://www.youtube.com/watch?v=abc"), Some("www.youtube.com".to_string()));
-        assert_eq!(parse_host("https://vimeo.com/12345"), Some("vimeo.com".to_string()));
-        assert_eq!(parse_host("https://x.com/user/status/123"), Some("x.com".to_string()));
+        assert_eq!(
+            parse_host("https://www.youtube.com/watch?v=abc"),
+            Some("www.youtube.com".to_string())
+        );
+        assert_eq!(
+            parse_host("https://vimeo.com/12345"),
+            Some("vimeo.com".to_string())
+        );
+        assert_eq!(
+            parse_host("https://x.com/user/status/123"),
+            Some("x.com".to_string())
+        );
         assert_eq!(parse_host("not-a-url"), None);
     }
 
     #[test]
     fn test_strip_ansi() {
-        assert_eq!(strip_ansi("\x1b[0;94m[download]\x1b[0m  45.2%"), "[download]  45.2%");
+        assert_eq!(
+            strip_ansi("\x1b[0;94m[download]\x1b[0m  45.2%"),
+            "[download]  45.2%"
+        );
         assert_eq!(strip_ansi("no escape codes"), "no escape codes");
         assert_eq!(strip_ansi(""), "");
     }

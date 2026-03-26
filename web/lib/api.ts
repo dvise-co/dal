@@ -7,6 +7,7 @@ export interface QueueEntry {
   output: string | null;
   category_id: number | null;
   position: number | null;
+  archived: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -50,9 +51,32 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export async function getQueue(status?: string): Promise<QueueEntry[]> {
-  const params = status ? `?status=${status}` : "";
-  return fetchJSON(`/queue${params}`);
+export async function getQueue(params?: {
+  status?: string;
+  archived?: boolean;
+  include_archived?: boolean;
+}): Promise<QueueEntry[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.archived) searchParams.set("archived", "true");
+  if (params?.include_archived) searchParams.set("include_archived", "true");
+  const qs = searchParams.toString();
+  return fetchJSON(`/queue${qs ? `?${qs}` : ""}`);
+}
+
+export async function archiveQueue(id: number): Promise<void> {
+  return fetchJSON(`/queue/${id}/archive`, { method: "POST" });
+}
+
+export async function unarchiveQueue(id: number): Promise<void> {
+  return fetchJSON(`/queue/${id}/unarchive`, { method: "POST" });
+}
+
+export async function archiveAllQueue(status?: string): Promise<void> {
+  return fetchJSON("/queue/archive-all", {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
 }
 
 export async function addToQueue(

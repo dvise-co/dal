@@ -1,13 +1,13 @@
+use crate::AppState;
+use crate::rename;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use crate::AppState;
-use crate::rename;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -55,7 +55,7 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<FileEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files"
+        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, created_at, rated_at FROM files",
     );
     let mut conditions: Vec<String> = Vec::new();
 
@@ -80,13 +80,18 @@ async fn list(
         _ => query.push_str(" ORDER BY created_at DESC"),
     }
 
-    let entries: Vec<FileEntry> = sqlx::query_as(&query)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: format!("Database error: {}", e) }),
-        ))?;
+    let entries: Vec<FileEntry> =
+        sqlx::query_as(&query)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Database error: {}", e),
+                    }),
+                )
+            })?;
 
     Ok(Json(entries))
 }
@@ -99,7 +104,9 @@ async fn rate(
     if !(10..=99).contains(&body.rating) {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: "Rating must be between 10 and 99".to_string() }),
+            Json(ErrorResponse {
+                error: "Rating must be between 10 and 99".to_string(),
+            }),
         ));
     }
 
@@ -125,12 +132,20 @@ async fn rate(
         std::path::Path::new(download_dir),
         &file.filename,
         body.rating,
-    ).map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse { error: format!("Rename error: {}", e) }),
-    ))?;
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Rename error: {}", e),
+            }),
+        )
+    })?;
 
-    let new_path = std::path::Path::new(download_dir).join(&new_filename).to_string_lossy().to_string();
+    let new_path = std::path::Path::new(download_dir)
+        .join(&new_filename)
+        .to_string_lossy()
+        .to_string();
 
     // Update database
     let updated: FileEntry = sqlx::query_as(
@@ -178,10 +193,14 @@ async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: format!("Database error: {}", e) }),
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Database error: {}", e),
+                }),
+            )
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }

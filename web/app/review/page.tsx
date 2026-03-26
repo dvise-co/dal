@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { getFiles, rateFile, deleteFile, getCategories, FileEntry, Category, formatBytes } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type SortField = "date" | "rating" | "name";
 type FilterMode = "all" | "unrated" | "incomplete";
@@ -14,6 +17,7 @@ export default function ReviewPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [error, setError] = useState("");
   const [ratingInputs, setRatingInputs] = useState<Record<number, string>>({});
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -30,8 +34,11 @@ export default function ReviewPage() {
   }, [sort, filter, categoryFilter]);
 
   useEffect(() => {
-    refresh();
-    getCategories().then(setCategories).catch(() => {});
+    const load = async () => {
+      await refresh();
+      getCategories().then(setCategories).catch(() => {});
+    };
+    load();
   }, [refresh]);
 
   const handleRate = async (id: number) => {
@@ -43,11 +50,7 @@ export default function ReviewPage() {
     setError("");
     try {
       await rateFile(id, value);
-      setRatingInputs((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
+      setRatingInputs((prev) => { const next = { ...prev }; delete next[id]; return next; });
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to rate");
@@ -64,156 +67,163 @@ export default function ReviewPage() {
     }
   };
 
+  const categoryName = (catId: number | null) => {
+    if (catId === null) return null;
+    return categories.find((c) => c.id === catId)?.name || null;
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Review Files</h1>
-        <button
-          onClick={refresh}
-          className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors"
-        >
+        <h1 className="text-xl font-bold">Review Files</h1>
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={refresh}>
           Refresh
-        </button>
+        </Button>
       </div>
 
-      {/* Controls */}
-      <div className="flex flex-wrap gap-4">
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-muted-foreground">Filter:</label>
-          <div className="flex rounded-lg border border-border overflow-hidden">
-            {(["all", "unrated", "incomplete"] as FilterMode[]).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  filter === f
-                    ? "bg-zinc-700 text-white"
-                    : "text-muted-foreground hover:bg-zinc-800"
-                }`}
-              >
-                {f.charAt(0).toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-          </div>
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
+        <div className="flex gap-1">
+          {(["all", "unrated", "incomplete"] as FilterMode[]).map((f) => (
+            <Button
+              key={f}
+              variant={filter === f ? "default" : "ghost"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setFilter(f)}
+            >
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </Button>
+          ))}
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-muted-foreground">Sort:</label>
-          <div className="flex rounded-lg border border-border overflow-hidden">
-            {(["date", "rating", "name"] as SortField[]).map((s) => (
-              <button
-                key={s}
-                onClick={() => setSort(s)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  sort === s
-                    ? "bg-zinc-700 text-white"
-                    : "text-muted-foreground hover:bg-zinc-800"
-                }`}
-              >
-                {s.charAt(0).toUpperCase() + s.slice(1)}
-              </button>
-            ))}
-          </div>
+
+        <div className="w-px h-5 bg-border" />
+
+        <div className="flex gap-1">
+          {(["date", "rating", "name"] as SortField[]).map((s) => (
+            <Button
+              key={s}
+              variant={sort === s ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setSort(s)}
+            >
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </Button>
+          ))}
         </div>
+
         {categories.length > 0 && (
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-muted-foreground">Category:</label>
+          <>
+            <div className="w-px h-5 bg-border" />
             <select
               value={categoryFilter ?? ""}
-              onChange={(e) =>
-                setCategoryFilter(e.target.value ? Number(e.target.value) : null)
-              }
-              className="rounded-lg bg-zinc-900 border border-border px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
+              onChange={(e) => setCategoryFilter(e.target.value ? Number(e.target.value) : null)}
+              className="rounded-md bg-background border border-input px-2 h-7 text-xs"
             >
-              <option value="">All</option>
+              <option value="">All Categories</option>
               {categories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </option>
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
               ))}
             </select>
-          </div>
+          </>
         )}
       </div>
 
       {error && (
-        <p className="text-sm text-destructive bg-red-500/10 rounded-lg px-4 py-2">{error}</p>
+        <p className="text-sm text-destructive bg-destructive/10 rounded-md px-3 py-2">{error}</p>
       )}
 
-      {/* File Grid */}
-      {files.length === 0 ? (
-        <p className="text-muted-foreground text-sm py-8 text-center">
-          No files to review. Download something first.
-        </p>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {files.map((file) => (
-            <div
-              key={file.id}
-              className="rounded-lg border border-border bg-zinc-900 p-4 space-y-3"
-            >
-              {/* Filename + status */}
-              <div>
-                <p className="text-sm font-medium truncate" title={file.filename}>
-                  {file.filename}
-                </p>
-                <p
-                  className="text-xs text-muted-foreground truncate mt-0.5"
-                  title={file.path}
-                >
-                  {file.path}
-                </p>
-              </div>
+      {/* File List */}
+      <div className="space-y-px">
+        {files.length === 0 ? (
+          <p className="text-muted-foreground text-sm py-8 text-center">
+            No files to review.
+          </p>
+        ) : (
+          files.map((file) => {
+            const isExpanded = expandedId === file.id;
+            const catName = categoryName(file.category_id);
 
-              {/* Metadata */}
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span>{formatBytes(file.size_bytes)}</span>
-                {file.duration && <span>{file.duration}</span>}
-                {file.rating !== null && (
-                  <span className="text-accent font-bold text-sm">
-                    {file.rating}
+            return (
+              <div key={file.id} className="rounded border border-border bg-card">
+                {/* Compact row */}
+                <div
+                  className="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs"
+                  onClick={() => setExpandedId(isExpanded ? null : file.id)}
+                >
+                  {/* Rating */}
+                  {file.rating !== null ? (
+                    <Badge variant="default" className="text-[10px] px-1.5 py-0 min-w-[28px] justify-center">
+                      {file.rating}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 min-w-[28px] justify-center text-muted-foreground">
+                      —
+                    </Badge>
+                  )}
+
+                  {file.filename.startsWith("INCOMPLETE - ") && (
+                    <Badge variant="destructive" className="text-[10px] px-1.5 py-0">INC</Badge>
+                  )}
+
+                  {catName && (
+                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-accent/20 text-accent-foreground">
+                      {catName}
+                    </Badge>
+                  )}
+
+                  <span className="flex-1 min-w-0 font-mono truncate text-muted-foreground" title={file.filename}>
+                    {file.filename}
                   </span>
-                )}
-                {file.filename.startsWith("INCOMPLETE - ") && (
-                  <span className="text-warning font-medium">INCOMPLETE</span>
-                )}
-              </div>
 
-              {/* Rating + Actions */}
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={10}
-                  max={99}
-                  placeholder={file.rating?.toString() || "10-99"}
-                  value={ratingInputs[file.id] ?? ""}
-                  onChange={(e) =>
-                    setRatingInputs((prev) => ({
-                      ...prev,
-                      [file.id]: e.target.value,
-                    }))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleRate(file.id);
-                  }}
-                  className="w-20 rounded-md bg-zinc-800 border border-border px-2 py-1 text-sm text-center focus:outline-none focus:ring-1 focus:ring-accent"
-                />
-                <button
-                  onClick={() => handleRate(file.id)}
-                  className="rounded-md bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-blue-600 transition-colors"
-                >
-                  Rate
-                </button>
-                <button
-                  onClick={() => handleDelete(file.id, file.filename)}
-                  className="rounded-md border border-red-500/30 px-3 py-1 text-xs text-destructive hover:bg-red-500/10 transition-colors ml-auto"
-                >
-                  Delete
-                </button>
+                  <span className="shrink-0 text-muted-foreground">{formatBytes(file.size_bytes)}</span>
+
+                  <span className="text-muted-foreground shrink-0">
+                    {isExpanded ? "\u25BE" : "\u25B8"}
+                  </span>
+                </div>
+
+                {/* Expanded detail */}
+                {isExpanded && (
+                  <div className="px-3 pb-3 pt-1.5 space-y-2 border-t border-border">
+                    <p className="text-[11px] font-mono text-muted-foreground break-all">{file.path}</p>
+
+                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <span>{formatBytes(file.size_bytes)}</span>
+                      {file.duration && <span>{file.duration}</span>}
+                      <span>Added: {file.created_at}</span>
+                      {file.rated_at && <span>Rated: {file.rated_at}</span>}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        type="number"
+                        min={10}
+                        max={99}
+                        placeholder={file.rating?.toString() || "10-99"}
+                        value={ratingInputs[file.id] ?? ""}
+                        onChange={(e) => setRatingInputs((prev) => ({ ...prev, [file.id]: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleRate(file.id); }}
+                        className="w-16 h-6 text-xs text-center"
+                      />
+                      <Button variant="default" size="sm" className="h-6 text-[11px]" onClick={() => handleRate(file.id)}>
+                        Rate
+                      </Button>
+                      <Button
+                        variant="destructive" size="sm" className="h-6 text-[11px] ml-auto"
+                        onClick={() => handleDelete(file.id, file.filename)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

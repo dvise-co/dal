@@ -14,9 +14,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="h-full dark">
-      <body className="min-h-full flex flex-col bg-zinc-950 text-zinc-100 font-sans">
+      <body className="min-h-full flex flex-col bg-background text-foreground font-sans antialiased">
         <Nav />
-        <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-6">
+        <main className="flex-1 max-w-screen-2xl mx-auto w-full px-6 py-4">
           {children}
         </main>
       </body>

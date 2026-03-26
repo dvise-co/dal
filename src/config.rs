@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub server: ServerConfig,
@@ -29,17 +29,9 @@ pub struct StorageConfig {
 pub struct YtdlpConfig {
     pub binary: String,
     pub max_concurrent: usize,
+    pub output_template: Option<String>,
+    pub default_args: Vec<String>,
     pub extra_args: Vec<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            storage: StorageConfig::default(),
-            ytdlp: YtdlpConfig::default(),
-        }
-    }
 }
 
 impl Default for ServerConfig {
@@ -66,7 +58,17 @@ impl Default for YtdlpConfig {
         Self {
             binary: "yt-dlp".to_string(),
             max_concurrent: 1,
-            extra_args: vec!["--merge-output-format".to_string(), "mp4".to_string()],
+            output_template: None,
+            default_args: vec![
+                "--newline".to_string(),
+                "--no-colors".to_string(),
+                "--verbose".to_string(),
+                "--progress".to_string(),
+                "--continue".to_string(),
+                "--trim-filenames".to_string(),
+                "150".to_string(),
+            ],
+            extra_args: vec![],
         }
     }
 }
@@ -77,7 +79,10 @@ pub fn load_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     } else {
-        tracing::info!("Config file not found at {}, using defaults", path.display());
+        tracing::info!(
+            "Config file not found at {}, using defaults",
+            path.display()
+        );
         Ok(Config::default())
     }
 }
@@ -94,6 +99,9 @@ mod tests {
         assert_eq!(config.storage.download_dir, "./downloads");
         assert!(config.storage.segment_by_host);
         assert_eq!(config.ytdlp.max_concurrent, 1);
+        assert!(config.ytdlp.output_template.is_none());
+        assert_eq!(config.ytdlp.default_args.len(), 7); // --newline, --no-colors, --verbose, --progress, --continue, --trim-filenames, 150
+        assert!(config.ytdlp.extra_args.is_empty());
     }
 
     #[test]
@@ -111,6 +119,8 @@ mod tests {
             [ytdlp]
             binary = "/usr/bin/yt-dlp"
             max_concurrent = 3
+            default_args = ["--newline", "--continue"]
+            output_template = "%(uploader)s/%(title)s.%(ext)s"
             extra_args = ["--format", "best"]
         "#;
         let config: Config = toml::from_str(toml).unwrap();
@@ -119,6 +129,11 @@ mod tests {
         assert_eq!(config.storage.download_dir, "/tmp/videos");
         assert!(!config.storage.segment_by_host);
         assert_eq!(config.ytdlp.max_concurrent, 3);
+        assert_eq!(config.ytdlp.default_args, vec!["--newline", "--continue"]);
+        assert_eq!(
+            config.ytdlp.output_template.as_deref(),
+            Some("%(uploader)s/%(title)s.%(ext)s")
+        );
         assert_eq!(config.ytdlp.extra_args, vec!["--format", "best"]);
     }
 
