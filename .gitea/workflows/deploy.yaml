@@ -13,18 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Initialize .docker config
-        run: |
-          mkdir -p .docker/dal/data .docker/dal/downloads
-          if [ ! -f .docker/dal/dal.toml ]; then
-            echo "First run — creating .docker/dal/dal.toml from example"
-            cp dal.toml.example .docker/dal/dal.toml
-          fi
-
       - name: Build and restart containers
         run: |
-          docker compose build --no-cache
-          docker compose up -d --force-recreate --remove-orphans
+          COMPOSE_FILES="-f docker-compose.yml"
+          if [ -f ~/.dal/docker-compose.override.yml ]; then
+            COMPOSE_FILES="$COMPOSE_FILES -f ~/.dal/docker-compose.override.yml"
+          fi
+          docker compose $COMPOSE_FILES build --no-cache
+          docker compose $COMPOSE_FILES up -d --force-recreate --remove-orphans
 
       - name: Wait for services to start
         run: |
