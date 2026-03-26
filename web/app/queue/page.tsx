@@ -266,7 +266,7 @@ export default function QueuePage() {
       </div>
 
       {/* Queue List */}
-      <div className="space-y-px">
+      <div className="space-y-1">
         {entries.length === 0 ? (
           <p className="text-muted-foreground text-sm py-8 text-center">
             {statusFilter === "archived" ? "No archived items." : "Queue is empty."}
@@ -356,7 +356,7 @@ export default function QueuePage() {
 
                 {/* Expanded detail */}
                 {isExpanded && (
-                  <div className="px-3 pb-3 pt-1.5 space-y-2 border-t border-border">
+                  <div className="px-3 pb-3 pt-2 space-y-2 border-t border-border/50 bg-muted/30">
                     <p className="text-[11px] font-mono text-muted-foreground break-all">{entry.url}</p>
 
                     <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
