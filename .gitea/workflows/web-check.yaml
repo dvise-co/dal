@@ -2,6 +2,8 @@ name: Web — Build & Lint
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "web/**"
   pull_request:

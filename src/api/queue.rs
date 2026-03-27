@@ -18,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/queue/{id}/archive", post(archive))
         .route("/api/queue/{id}/unarchive", post(unarchive))
         .route("/api/queue/{id}/retry", post(retry))
+        .route("/api/queue/{id}/move-next", post(move_next))
         .route("/api/queue/{id}/history", axum::routing::get(history))
 }
 
@@ -250,6 +251,70 @@ async fn reorder(
                 )
             })?;
     }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn move_next(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    // Get the first pending entry (the one currently "next up")
+    let first_pending: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT id, position FROM queue WHERE status = 'pending' AND (archived = FALSE OR archived IS NULL) ORDER BY position ASC LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Database error: {}", e) }),
+        )
+    })?;
+
+    // Get the target entry
+    let target: Option<(i64, i64)> =
+        sqlx::query_as("SELECT id, position FROM queue WHERE id = ? AND status = 'pending'")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Database error: {}", e),
+                    }),
+                )
+            })?;
+
+    let (target_id, _target_pos) = target.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Entry not found or not in pending state".to_string(),
+        }),
+    ))?;
+
+    // If there's no other pending entry or the target is already first, nothing to do
+    let (_first_id, first_pos) = match first_pending {
+        Some(f) if f.0 != target_id => f,
+        _ => return Ok(StatusCode::NO_CONTENT),
+    };
+
+    // Place the target right before the current first pending entry
+    let new_pos = first_pos - 1;
+    sqlx::query("UPDATE queue SET position = ? WHERE id = ?")
+        .bind(new_pos)
+        .bind(target_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Database error: {}", e),
+                }),
+            )
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }

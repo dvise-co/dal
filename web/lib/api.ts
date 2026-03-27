@@ -107,7 +107,7 @@ export async function getQueueHistory(id: number): Promise<HistoryEntry[]> {
 export async function addToQueue(
   url: string,
   force: boolean = false,
-  category?: string
+  category?: string,
 ): Promise<QueueEntry> {
   const body: Record<string, unknown> = { url, force };
   if (category) body.category = category;
@@ -119,6 +119,10 @@ export async function addToQueue(
 
 export async function cancelQueue(id: number): Promise<void> {
   return fetchJSON(`/queue/${id}`, { method: "DELETE" });
+}
+
+export async function moveToNext(id: number): Promise<void> {
+  return fetchJSON(`/queue/${id}/move-next`, { method: "POST" });
 }
 
 export async function reorderQueue(order: number[]): Promise<void> {
@@ -137,16 +141,14 @@ export async function getFiles(params?: {
   const searchParams = new URLSearchParams();
   if (params?.unrated) searchParams.set("unrated", "true");
   if (params?.incomplete) searchParams.set("incomplete", "true");
-  if (params?.category_id) searchParams.set("category_id", String(params.category_id));
+  if (params?.category_id)
+    searchParams.set("category_id", String(params.category_id));
   if (params?.sort) searchParams.set("sort", params.sort);
   const qs = searchParams.toString();
   return fetchJSON(`/files${qs ? `?${qs}` : ""}`);
 }
 
-export async function rateFile(
-  id: number,
-  rating: number
-): Promise<FileEntry> {
+export async function rateFile(id: number, rating: number): Promise<FileEntry> {
   return fetchJSON(`/files/${id}/rate`, {
     method: "POST",
     body: JSON.stringify({ rating }),

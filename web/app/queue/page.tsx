@@ -6,6 +6,7 @@ import {
   addToQueue,
   cancelQueue,
   reorderQueue,
+  moveToNext,
   archiveQueue,
   unarchiveQueue,
   archiveAllQueue,
@@ -23,9 +24,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 
-type StatusFilter = "all" | "pending" | "downloading" | "completed" | "failed" | "archived";
+type StatusFilter =
+  | "all"
+  | "pending"
+  | "downloading"
+  | "completed"
+  | "failed"
+  | "archived";
 
-const STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+const STATUS_VARIANTS: Record<
+  string,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
   pending: "outline",
   downloading: "default",
   completed: "secondary",
@@ -43,7 +53,9 @@ export default function QueuePage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [wsLogs, setWsLogs] = useState<Record<number, string[]>>({});
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [selectedCategories, setSelectedCategories] = useState<Set<number | null>>(new Set());
+  const [selectedCategories, setSelectedCategories] = useState<
+    Set<number | null>
+  >(new Set());
   const [categoriesInitialized, setCategoriesInitialized] = useState(false);
   const [dragId, setDragId] = useState<number | null>(null);
   const [dragOverId, setDragOverId] = useState<number | null>(null);
@@ -53,7 +65,7 @@ export default function QueuePage() {
       const data = await getQueue(
         statusFilter === "archived"
           ? { archived: true }
-          : { include_archived: false }
+          : { include_archived: false },
       );
       setAllEntries(data);
     } catch {
@@ -63,14 +75,19 @@ export default function QueuePage() {
 
   useEffect(() => {
     refresh();
-    getCategories().then((cats) => {
-      setCategories(cats);
-      if (!categoriesInitialized) {
-        const allIds = new Set<number | null>([null, ...cats.map((c) => c.id)]);
-        setSelectedCategories(allIds);
-        setCategoriesInitialized(true);
-      }
-    }).catch(() => {});
+    getCategories()
+      .then((cats) => {
+        setCategories(cats);
+        if (!categoriesInitialized) {
+          const allIds = new Set<number | null>([
+            null,
+            ...cats.map((c) => c.id),
+          ]);
+          setSelectedCategories(allIds);
+          setCategoriesInitialized(true);
+        }
+      })
+      .catch(() => {});
     const interval = setInterval(refresh, 10000);
     return () => clearInterval(interval);
   }, [refresh, categoriesInitialized]);
@@ -81,14 +98,21 @@ export default function QueuePage() {
       setAllEntries((prev) =>
         prev.map((e) =>
           e.id === update.queue_id
-            ? { ...e, progress: update.progress || e.progress, status: update.status as QueueEntry["status"] }
-            : e
-        )
+            ? {
+                ...e,
+                progress: update.progress || e.progress,
+                status: update.status as QueueEntry["status"],
+              }
+            : e,
+        ),
       );
       if (update.output) {
         setWsLogs((prev) => {
           const current = prev[update.queue_id] || [];
-          return { ...prev, [update.queue_id]: [...current, update.output!].slice(-200) };
+          return {
+            ...prev,
+            [update.queue_id]: [...current, update.output!].slice(-200),
+          };
         });
       }
       if (update.status === "completed" || update.status === "failed") {
@@ -99,7 +123,12 @@ export default function QueuePage() {
 
   // Filter entries
   const entries = allEntries.filter((e) => {
-    if (statusFilter !== "all" && statusFilter !== "archived" && e.status !== statusFilter) return false;
+    if (
+      statusFilter !== "all" &&
+      statusFilter !== "archived" &&
+      e.status !== statusFilter
+    )
+      return false;
     if (!selectedCategories.has(e.category_id)) return false;
     return true;
   });
@@ -111,7 +140,7 @@ export default function QueuePage() {
       acc.all = (acc.all || 0) + 1;
       return acc;
     },
-    {} as Record<string, number>
+    {} as Record<string, number>,
   );
 
   const categoryName = (catId: number | null) => {
@@ -122,7 +151,9 @@ export default function QueuePage() {
   const handleSubmit = async (e: React.FormEvent, force: boolean = false) => {
     e.preventDefault();
     if (!url.trim()) return;
-    setError(""); setDuplicateUrl(""); setLoading(true);
+    setError("");
+    setDuplicateUrl("");
+    setLoading(true);
     try {
       await addToQueue(url.trim(), force, category || undefined);
       setUrl("");
@@ -136,21 +167,73 @@ export default function QueuePage() {
     }
   };
 
-  const handleForceDownload = async (e: React.FormEvent) => { await handleSubmit(e, true); setDuplicateUrl(""); };
-  const handleCancel = async (id: number) => { try { await cancelQueue(id); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Failed"); } };
-  const handleRetry = async (id: number) => { try { await retryQueue(id); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Failed"); } };
-  const handleRetryAll = async () => { try { await retryAllQueue(); await refresh(); } catch {} };
-  const handleArchive = async (id: number) => { try { await archiveQueue(id); await refresh(); } catch {} };
-  const handleUnarchive = async (id: number) => { try { await unarchiveQueue(id); await refresh(); } catch {} };
-  const handleArchiveAll = async (status?: string) => { try { await archiveAllQueue(status); await refresh(); } catch {} };
+  const handleForceDownload = async (e: React.FormEvent) => {
+    await handleSubmit(e, true);
+    setDuplicateUrl("");
+  };
+  const handleCancel = async (id: number) => {
+    try {
+      await cancelQueue(id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed");
+    }
+  };
+  const handleRetry = async (id: number) => {
+    try {
+      await retryQueue(id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed");
+    }
+  };
+  const handleRetryAll = async () => {
+    try {
+      await retryAllQueue();
+      await refresh();
+    } catch {}
+  };
+  const handleArchive = async (id: number) => {
+    try {
+      await archiveQueue(id);
+      await refresh();
+    } catch {}
+  };
+  const handleUnarchive = async (id: number) => {
+    try {
+      await unarchiveQueue(id);
+      await refresh();
+    } catch {}
+  };
+  const handleArchiveAll = async (status?: string) => {
+    try {
+      await archiveAllQueue(status);
+      await refresh();
+    } catch {}
+  };
+  const handleMoveToNext = async (id: number) => {
+    try {
+      await moveToNext(id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed");
+    }
+  };
 
   // Drag and drop
   const handleDragStart = (id: number) => setDragId(id);
-  const handleDragOver = (e: React.DragEvent, id: number) => { e.preventDefault(); if (dragId !== null && dragId !== id) setDragOverId(id); };
+  const handleDragOver = (e: React.DragEvent, id: number) => {
+    e.preventDefault();
+    if (dragId !== null && dragId !== id) setDragOverId(id);
+  };
   const handleDragLeave = () => setDragOverId(null);
   const handleDrop = async (e: React.DragEvent, targetId: number) => {
-    e.preventDefault(); setDragOverId(null);
-    if (dragId === null || dragId === targetId) { setDragId(null); return; }
+    e.preventDefault();
+    setDragOverId(null);
+    if (dragId === null || dragId === targetId) {
+      setDragId(null);
+      return;
+    }
     const newEntries = [...allEntries];
     const dragIdx = newEntries.findIndex((e) => e.id === dragId);
     const targetIdx = newEntries.findIndex((e) => e.id === targetId);
@@ -159,14 +242,22 @@ export default function QueuePage() {
     newEntries.splice(targetIdx, 0, moved);
     setAllEntries(newEntries);
     setDragId(null);
-    try { await reorderQueue(newEntries.map((e) => e.id)); } catch { await refresh(); }
+    try {
+      await reorderQueue(newEntries.map((e) => e.id));
+    } catch {
+      await refresh();
+    }
   };
-  const handleDragEnd = () => { setDragId(null); setDragOverId(null); };
+  const handleDragEnd = () => {
+    setDragId(null);
+    setDragOverId(null);
+  };
 
   const toggleCategory = (catId: number | null) => {
     setSelectedCategories((prev) => {
       const next = new Set(prev);
-      if (next.has(catId)) next.delete(catId); else next.add(catId);
+      if (next.has(catId)) next.delete(catId);
+      else next.add(catId);
       return next;
     });
   };
@@ -191,10 +282,17 @@ export default function QueuePage() {
         >
           <option value="">Uncategorized</option>
           {categories.map((cat) => (
-            <option key={cat.id} value={cat.name}>{cat.name}</option>
+            <option key={cat.id} value={cat.name}>
+              {cat.name}
+            </option>
           ))}
         </select>
-        <Button type="submit" disabled={loading || !url.trim()} size="sm" className="h-9">
+        <Button
+          type="submit"
+          disabled={loading || !url.trim()}
+          size="sm"
+          className="h-9"
+        >
           {loading ? "Queuing..." : "Queue"}
         </Button>
       </form>
@@ -203,7 +301,12 @@ export default function QueuePage() {
         <div className="text-sm text-destructive bg-destructive/10 rounded-md px-3 py-2 flex items-center justify-between gap-2">
           <span>{error}</span>
           {duplicateUrl && (
-            <Button variant="outline" size="sm" onClick={handleForceDownload} className="h-7 text-xs">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleForceDownload}
+              className="h-7 text-xs"
+            >
               Force re-download
             </Button>
           )}
@@ -214,7 +317,16 @@ export default function QueuePage() {
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
         {/* Status tabs */}
         <div className="flex gap-1">
-          {(["all", "pending", "downloading", "completed", "failed", "archived"] as StatusFilter[]).map((s) => (
+          {(
+            [
+              "all",
+              "pending",
+              "downloading",
+              "completed",
+              "failed",
+              "archived",
+            ] as StatusFilter[]
+          ).map((s) => (
             <Button
               key={s}
               variant={statusFilter === s ? "default" : "ghost"}
@@ -232,16 +344,31 @@ export default function QueuePage() {
 
         {/* Archive bulk actions */}
         {counts.completed > 0 && (
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleArchiveAll("completed")}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => handleArchiveAll("completed")}
+          >
             Archive Completed
           </Button>
         )}
         {counts.failed > 0 && (
           <>
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleArchiveAll("failed")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => handleArchiveAll("failed")}
+            >
               Archive Failed
             </Button>
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleRetryAll}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={handleRetryAll}
+            >
               Retry All Failed
             </Button>
           </>
@@ -261,7 +388,10 @@ export default function QueuePage() {
                 <span>Uncategorized</span>
               </label>
               {categories.map((cat) => (
-                <label key={cat.id} className="flex items-center gap-1.5 cursor-pointer">
+                <label
+                  key={cat.id}
+                  className="flex items-center gap-1.5 cursor-pointer"
+                >
                   <Checkbox
                     checked={selectedCategories.has(cat.id)}
                     onCheckedChange={() => toggleCategory(cat.id)}
@@ -278,7 +408,9 @@ export default function QueuePage() {
       <div className="space-y-1">
         {entries.length === 0 ? (
           <p className="text-muted-foreground text-sm py-8 text-center">
-            {statusFilter === "archived" ? "No archived items." : "Queue is empty."}
+            {statusFilter === "archived"
+              ? "No archived items."
+              : "Queue is empty."}
           </p>
         ) : (
           entries.map((entry) => {
@@ -310,56 +442,113 @@ export default function QueuePage() {
                   onClick={() => setExpandedId(isExpanded ? null : entry.id)}
                 >
                   {canDrag ? (
-                    <span className="text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing select-none">&#x2807;</span>
+                    <span className="text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing select-none">
+                      &#x2807;
+                    </span>
                   ) : (
                     <span className="w-3" />
                   )}
 
-                  <Badge variant={STATUS_VARIANTS[entry.status] || "outline"} className="text-[10px] px-1.5 py-0">
+                  <Badge
+                    variant={STATUS_VARIANTS[entry.status] || "outline"}
+                    className="text-[10px] px-1.5 py-0"
+                  >
                     {entry.status}
                   </Badge>
 
                   {(entry.attempts ?? 0) > 1 && (
-                    <span className="text-[10px] text-muted-foreground">#{entry.attempts}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      #{entry.attempts}
+                    </span>
                   )}
 
                   {entry.status === "downloading" && entry.progress && (
-                    <span className="shrink-0 font-mono text-primary w-10 text-right text-[11px]">{entry.progress}</span>
+                    <span className="shrink-0 font-mono text-primary w-10 text-right text-[11px]">
+                      {entry.progress}
+                    </span>
                   )}
 
                   {catName && (
-                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-accent/20 text-accent-foreground">
+                    <Badge
+                      variant="secondary"
+                      className="text-[10px] px-1.5 py-0 bg-accent/20 text-accent-foreground"
+                    >
                       {catName}
                     </Badge>
                   )}
 
-                  <span className="flex-1 min-w-0 font-mono truncate text-muted-foreground" title={entry.url}>
+                  <span
+                    className="flex-1 min-w-0 font-mono truncate text-muted-foreground"
+                    title={entry.url}
+                  >
                     {entry.url}
                   </span>
 
                   {entry.error && (
-                    <span className="shrink-0 text-[10px] text-destructive truncate max-w-48" title={entry.error}>{entry.error}</span>
+                    <span
+                      className="shrink-0 text-[10px] text-destructive truncate max-w-48"
+                      title={entry.error}
+                    >
+                      {entry.error}
+                    </span>
                   )}
 
                   {/* Inline actions */}
-                  <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div
+                    className="flex gap-1 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {entry.status === "pending" &&
+                      entry.id !==
+                        allEntries.find((e) => e.status === "pending")?.id && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-5 text-[10px] px-1.5"
+                          onClick={() => handleMoveToNext(entry.id)}
+                        >
+                          Next
+                        </Button>
+                      )}
                     {entry.status === "pending" && (
-                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleCancel(entry.id)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 text-[10px] px-1.5"
+                        onClick={() => handleCancel(entry.id)}
+                      >
                         Cancel
                       </Button>
                     )}
                     {entry.status === "failed" && (
-                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleRetry(entry.id)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 text-[10px] px-1.5"
+                        onClick={() => handleRetry(entry.id)}
+                      >
                         Retry
                       </Button>
                     )}
-                    {(entry.status === "completed" || entry.status === "failed") && !entry.archived && (
-                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleArchive(entry.id)}>
-                        Archive
-                      </Button>
-                    )}
+                    {(entry.status === "completed" ||
+                      entry.status === "failed") &&
+                      !entry.archived && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-5 text-[10px] px-1.5"
+                          onClick={() => handleArchive(entry.id)}
+                        >
+                          Archive
+                        </Button>
+                      )}
                     {entry.archived && (
-                      <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1.5" onClick={() => handleUnarchive(entry.id)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 text-[10px] px-1.5"
+                        onClick={() => handleUnarchive(entry.id)}
+                      >
                         Unarchive
                       </Button>
                     )}
@@ -373,7 +562,10 @@ export default function QueuePage() {
                 {/* Progress bar */}
                 {entry.status === "downloading" && entry.progress && (
                   <div className="w-full bg-muted h-0.5">
-                    <div className="bg-primary h-0.5 transition-all duration-300" style={{ width: entry.progress.replace("%", "") + "%" }} />
+                    <div
+                      className="bg-primary h-0.5 transition-all duration-300"
+                      style={{ width: entry.progress.replace("%", "") + "%" }}
+                    />
                   </div>
                 )}
 
@@ -383,7 +575,9 @@ export default function QueuePage() {
                     {outputLines.length > 0 ? (
                       <LogPanel lines={outputLines} />
                     ) : (
-                      <p className="px-3 py-2 text-[10px] text-muted-foreground">No output yet.</p>
+                      <p className="px-3 py-2 text-[10px] text-muted-foreground">
+                        No output yet.
+                      </p>
                     )}
                     {(entry.attempts ?? 0) > 1 && (
                       <div className="px-3 pb-2">
@@ -417,7 +611,9 @@ function LogPanel({ lines }: { lines: string[] }) {
       className="h-48 overflow-y-auto rounded border border-border bg-black/40 p-2 font-mono text-[10px] text-green-400/80 leading-relaxed"
     >
       {lines.map((line, i) => (
-        <div key={i} className="whitespace-pre-wrap break-all">{line}</div>
+        <div key={i} className="whitespace-pre-wrap break-all">
+          {line}
+        </div>
       ))}
     </div>
   );
@@ -428,23 +624,37 @@ function HistoryPanel({ queueId }: { queueId: number }) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    getQueueHistory(queueId).then((data) => {
-      setEntries(data);
-      setLoaded(true);
-    }).catch(() => setLoaded(true));
+    getQueueHistory(queueId)
+      .then((data) => {
+        setEntries(data);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
   }, [queueId]);
 
-  if (!loaded) return <p className="text-[10px] text-muted-foreground">Loading history...</p>;
+  if (!loaded)
+    return (
+      <p className="text-[10px] text-muted-foreground">Loading history...</p>
+    );
   if (entries.length === 0) return null;
 
   return (
     <div className="space-y-1">
-      <p className="text-[10px] text-muted-foreground font-medium">Previous attempts:</p>
+      <p className="text-[10px] text-muted-foreground font-medium">
+        Previous attempts:
+      </p>
       {entries.map((h) => (
-        <div key={h.id} className="text-[10px] text-muted-foreground flex items-center gap-2">
-          <Badge variant="outline" className="text-[9px] px-1 py-0">{h.status}</Badge>
+        <div
+          key={h.id}
+          className="text-[10px] text-muted-foreground flex items-center gap-2"
+        >
+          <Badge variant="outline" className="text-[9px] px-1 py-0">
+            {h.status}
+          </Badge>
           <span>{h.created_at}</span>
-          {h.error && <span className="text-destructive truncate">{h.error}</span>}
+          {h.error && (
+            <span className="text-destructive truncate">{h.error}</span>
+          )}
         </div>
       ))}
     </div>

@@ -2,6 +2,8 @@ name: Rust — Test & Lint
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "src/**"
       - "migrations/**"
