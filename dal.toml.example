@@ -1,0 +1,54 @@
+[server]
+# Address to bind to
+host = "0.0.0.0"
+# Port for the API server
+port = 8550
+
+[storage]
+# Directory where yt-dlp saves downloaded files.
+# Docker: maps to the host path mounted at /downloads in docker-compose.yml
+# Direct: set to your actual path (e.g. /Volumes/system/cache/dal)
+download_dir = "/downloads"
+# Path to SQLite database file (created automatically).
+# Docker: persists in .docker/data/
+# Direct: set to your preferred location (e.g. ~/.dal/dal.db)
+database = "/data/dal.db"
+# Organize downloads into subdirectories by source hostname
+segment_by_host = true
+# Optional: rewrite displayed file paths (useful when download_dir is a Docker
+# volume mount and you want the UI to show the host path instead)
+# display_path_prefix = "/mnt/media"
+
+[ytdlp]
+# Path to yt-dlp binary
+binary = "yt-dlp"
+# Number of concurrent downloads
+max_concurrent = 1
+
+# Default arguments passed to yt-dlp before any extras.
+# --newline        progress on new lines (required for progress parsing)
+# --no-colors      strip ANSI color codes from output
+# --verbose        log extraction steps (recommended — some sites are silent without it)
+# --progress       show download progress
+# --continue       resume partially downloaded files
+# --trim-filenames 150  truncate filenames to prevent filesystem errors
+default_args = [
+  "--newline",
+  "--no-colors",
+  "--verbose",
+  "--progress",
+  "--continue",
+  "--trim-filenames", "150"
+]
+
+# Custom output template (overrides default yt-dlp naming)
+# If not set, yt-dlp uses: %(title)s.%(ext)s
+# output_template = "%(uploader)s/%(title)s.%(ext)s"
+
+# Additional arguments appended after default_args.
+# Use this for format selection, cookies, rate limiting, etc.
+#   --merge-output-format mp4     — always output mp4
+#   --format bestvideo+bestaudio  — best quality
+#   --cookies-from-browser firefox — use browser cookies
+#   --ratelimit 5M                — limit download speed
+extra_args = []

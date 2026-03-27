@@ -1,0 +1,37 @@
+# DAL Docker Compose
+#
+# First-time setup:
+#   1. docker compose up -d
+#      All data lives in .docker/dal/ (config, database, downloads)
+#      .docker/dal/dal.toml is auto-created from dal.toml.example
+#   2. Edit .docker/dal/dal.toml with your settings
+#   3. To use a Samba share instead of .docker/dal/downloads/,
+#      create docker-compose.override.yml:
+#
+#      services:
+#        dal-api:
+#          volumes:
+#            - /your/samba/share:/downloads
+#
+#   4. docker compose restart dal-api
+
+services:
+  dal-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8550:8550"
+    volumes:
+      - ./.docker/dal/dal.toml:/etc/dal/dal.toml:ro
+      - ./.docker/dal/data:/data
+      - ./.docker/dal/downloads:/downloads
+
+  dal-web:
+    build: ./web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_TELEMETRY_DISABLED=1
+      - DAL_API_URL=http://dal-api:8550
+      - HOSTNAME=0.0.0.0
