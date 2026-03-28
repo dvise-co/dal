@@ -86,6 +86,13 @@ async fn download_item(
 ) {
     tracing::info!("Starting download for queue {} url={}", queue_id, url);
 
+    // Create a per-download cancellation token as a child of the global one
+    let item_cancel = cancel.child_token();
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        downloads.insert(queue_id, item_cancel.clone());
+    }
+
     // Mark as downloading and increment attempts
     if let Err(e) = sqlx::query(
         "UPDATE queue SET status = 'downloading', attempts = COALESCE(attempts, 0) + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -95,6 +102,7 @@ async fn download_item(
     .await
     {
         tracing::error!("Failed to update queue status for {}: {}", queue_id, e);
+        state.active_downloads.lock().await.remove(&queue_id);
         return;
     }
 
@@ -172,6 +180,7 @@ async fn download_item(
         }
         Err(e) => {
             tracing::error!("Failed to spawn yt-dlp for queue {}: {}", queue_id, e);
+            state.active_downloads.lock().await.remove(&queue_id);
             let _ = sqlx::query("UPDATE queue SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                 .bind(format!("Failed to spawn yt-dlp: {}", e))
                 .bind(queue_id)
@@ -291,9 +300,17 @@ async fn download_item(
                     }
                 }
             }
-            _ = cancel.cancelled() => {
-                tracing::info!("Killing yt-dlp for queue {} due to shutdown", queue_id);
+            _ = item_cancel.cancelled() => {
+                tracing::info!("Killing yt-dlp for queue {} due to cancellation", queue_id);
                 let _ = child.kill().await;
+                state.active_downloads.lock().await.remove(&queue_id);
+                let _ = sqlx::query(
+                    "UPDATE queue SET status = 'cancelled', error = 'Cancelled by user', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                )
+                .bind(queue_id)
+                .execute(&state.db)
+                .await;
+                record_history(&state.db, queue_id, "cancelled", Some("Cancelled by user")).await;
                 return;
             }
         }
@@ -345,6 +362,9 @@ async fn download_item(
     } else {
         None
     };
+
+    // Unregister per-download cancellation token
+    state.active_downloads.lock().await.remove(&queue_id);
 
     match status {
         Ok(exit) if exit.success() => {
