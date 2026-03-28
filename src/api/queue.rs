@@ -99,6 +99,7 @@ async fn create(
 
     // Check for duplicate URL unless force is set
     if !body.force {
+        // Check if URL exists in the queue
         let existing: Option<QueueEntry> = sqlx::query_as(
             "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
         )
@@ -117,6 +118,30 @@ async fn create(
                     error: format!(
                         "URL already queued (id: {}, status: {}). Send with \"force\": true to re-download.",
                         prev.id, prev.status
+                    ),
+                }),
+            ));
+        }
+
+        // Check if URL was already downloaded (exists in files via queue join)
+        let existing_file: Option<(i64, String)> = sqlx::query_as(
+            "SELECT f.id, f.filename FROM files f JOIN queue q ON f.queue_id = q.id WHERE q.url = ? LIMIT 1"
+        )
+        .bind(&body.url)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Database error: {}", e) }),
+        ))?;
+
+        if let Some((file_id, filename)) = existing_file {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "URL already downloaded as \"{}\" (file id: {}). Send with \"force\": true to re-download.",
+                        filename, file_id
                     ),
                 }),
             ));
