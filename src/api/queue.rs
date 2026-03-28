@@ -123,10 +123,11 @@ async fn create(
             ));
         }
 
-        // Check if URL was already downloaded (exists in files via queue join)
+        // Check if URL was already downloaded (check files.url directly, or fall back to queue join for legacy records)
         let existing_file: Option<(i64, String)> = sqlx::query_as(
-            "SELECT f.id, f.filename FROM files f JOIN queue q ON f.queue_id = q.id WHERE q.url = ? LIMIT 1"
+            "SELECT id, filename FROM files WHERE url = ? UNION SELECT f.id, f.filename FROM files f JOIN queue q ON f.queue_id = q.id WHERE q.url = ? AND f.url IS NULL LIMIT 1"
         )
+        .bind(&body.url)
         .bind(&body.url)
         .fetch_optional(&state.db)
         .await

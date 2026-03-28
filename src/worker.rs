@@ -349,7 +349,7 @@ async fn download_item(
     match status {
         Ok(exit) if exit.success() => {
             record_history(&state.db, queue_id, "completed", None).await;
-            handle_success(state, queue_id, category_id, final_filepath, false).await;
+            handle_success(state, queue_id, url, category_id, final_filepath, false).await;
         }
         _ if is_provisional => {
             tracing::warn!(
@@ -358,11 +358,19 @@ async fn download_item(
                 provisional_reason.unwrap_or("unknown")
             );
             record_history(&state.db, queue_id, "completed", provisional_reason).await;
-            handle_success(state, queue_id, category_id, final_filepath, true).await;
+            handle_success(state, queue_id, url, category_id, final_filepath, true).await;
         }
         Ok(_) | Err(_) => {
             record_history(&state.db, queue_id, "failed", None).await;
-            handle_failure(state, queue_id, category_id, final_filepath, download_dir).await;
+            handle_failure(
+                state,
+                queue_id,
+                url,
+                category_id,
+                final_filepath,
+                download_dir,
+            )
+            .await;
         }
     }
 }
@@ -379,6 +387,7 @@ async fn record_history(db: &sqlx::SqlitePool, queue_id: i64, status: &str, erro
 async fn handle_success(
     state: &AppState,
     queue_id: i64,
+    url: &str,
     category_id: Option<i64>,
     final_filepath: Option<String>,
     provisional: bool,
@@ -394,9 +403,10 @@ async fn handle_success(
         let relative = state.config.storage.to_relative_path(filepath);
 
         let _ = sqlx::query(
-            "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id, provisional) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO files (queue_id, url, filename, original, path, size_bytes, category_id, provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(queue_id)
+        .bind(url)
         .bind(&filename)
         .bind(&filename)
         .bind(&relative)
@@ -418,6 +428,7 @@ async fn handle_success(
 async fn handle_failure(
     state: &AppState,
     queue_id: i64,
+    url: &str,
     category_id: Option<i64>,
     final_filepath: Option<String>,
     download_dir: &str,
@@ -442,9 +453,10 @@ async fn handle_failure(
                 .storage
                 .to_relative_path(&incomplete_path.to_string_lossy());
             let _ = sqlx::query(
-                "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO files (queue_id, url, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(queue_id)
+            .bind(url)
             .bind(&incomplete_name)
             .bind(&filename)
             .bind(&relative)
