@@ -31,15 +31,27 @@ pub fn spawn_worker(
                 return;
             }
 
-            let pending: Vec<(i64, String, Option<i64>)> = match sqlx::query_as(
-                "SELECT id, url, category_id FROM queue WHERE status = 'pending' ORDER BY position ASC, created_at ASC LIMIT 5"
+            // Acquire a permit before querying so we always fetch the latest ordering.
+            // This fixes "move to next" being ignored when the worker had already
+            // pre-fetched a stale batch of pending items.
+            let permit = tokio::select! {
+                p = semaphore.clone().acquire_owned() => match p {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                },
+                _ = cancel.cancelled() => return,
+            };
+
+            let next: Option<(i64, String, Option<i64>)> = match sqlx::query_as(
+                "SELECT id, url, category_id FROM queue WHERE status = 'pending' AND (archived = FALSE OR archived IS NULL) ORDER BY position ASC, created_at ASC LIMIT 1"
             )
-            .fetch_all(&state.db)
+            .fetch_optional(&state.db)
             .await
             {
-                Ok(rows) => rows,
+                Ok(row) => row,
                 Err(e) => {
                     tracing::error!("Failed to poll queue: {}", e);
+                    drop(permit);
                     tokio::select! {
                         _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
                         _ = cancel.cancelled() => return
@@ -48,29 +60,24 @@ pub fn spawn_worker(
                 }
             };
 
-            if pending.is_empty() {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
-                    _ = cancel.cancelled() => return
+            match next {
+                Some((id, url, category_id)) => {
+                    let state = state.clone();
+                    let cancel = cancel.clone();
+                    let tx = progress_tx.clone();
+
+                    tokio::spawn(async move {
+                        download_item(&state, id, &url, category_id, cancel, &tx).await;
+                        drop(permit);
+                    });
                 }
-                continue;
-            }
-
-            for (id, url, category_id) in pending {
-                let permit = semaphore.clone().acquire_owned().await.unwrap();
-                let state = state.clone();
-                let cancel = cancel.clone();
-                let tx = progress_tx.clone();
-
-                tokio::spawn(async move {
-                    download_item(&state, id, &url, category_id, cancel, &tx).await;
+                None => {
                     drop(permit);
-                });
-            }
-
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
-                _ = cancel.cancelled() => return
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                        _ = cancel.cancelled() => return
+                    }
+                }
             }
         }
     })
