@@ -256,6 +256,31 @@ async fn cancel(
 
     match status.as_str() {
         "pending" => {
+            // Delete child rows first to avoid FK constraint errors
+            sqlx::query("DELETE FROM queue_history WHERE queue_id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            sqlx::query("DELETE FROM files WHERE queue_id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
             sqlx::query("DELETE FROM queue WHERE id = ?")
                 .bind(id)
                 .execute(&state.db)
@@ -430,7 +455,7 @@ async fn archive_all(
             status.replace('\'', "")
         )
     } else {
-        "UPDATE queue SET archived = TRUE WHERE status IN ('completed', 'failed') AND (archived = FALSE OR archived IS NULL)".to_string()
+        "UPDATE queue SET archived = TRUE WHERE status IN ('completed', 'failed', 'cancelled') AND (archived = FALSE OR archived IS NULL)".to_string()
     };
     sqlx::query(&query).execute(&state.db).await.map_err(|e| {
         (
@@ -456,7 +481,7 @@ async fn retry(
     .await;
 
     let result = sqlx::query(
-        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed')",
+        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed', 'cancelled')",
     )
     .bind(id)
     .execute(&state.db)
