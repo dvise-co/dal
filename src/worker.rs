@@ -62,8 +62,14 @@ pub fn spawn_worker(
                 let cancel = cancel.clone();
                 let tx = progress_tx.clone();
 
+                // Create a per-download cancellation token
+                let download_cancel = CancellationToken::new();
+                state.download_tokens.lock().await.insert(id, download_cancel.clone());
+
                 tokio::spawn(async move {
-                    download_item(&state, id, &url, category_id, cancel, &tx).await;
+                    download_item(&state, id, &url, category_id, cancel, download_cancel.clone(), &tx).await;
+                    // Clean up the token when done
+                    state.download_tokens.lock().await.remove(&id);
                     drop(permit);
                 });
             }
@@ -82,6 +88,7 @@ async fn download_item(
     url: &str,
     category_id: Option<i64>,
     cancel: CancellationToken,
+    download_cancel: CancellationToken,
     tx: &broadcast::Sender<ProgressUpdate>,
 ) {
     tracing::info!("Starting download for queue {} url={}", queue_id, url);
@@ -294,6 +301,22 @@ async fn download_item(
             _ = cancel.cancelled() => {
                 tracing::info!("Killing yt-dlp for queue {} due to shutdown", queue_id);
                 let _ = child.kill().await;
+                return;
+            }
+            _ = download_cancel.cancelled() => {
+                tracing::info!("Killing yt-dlp for queue {} due to cancel request", queue_id);
+                let _ = child.kill().await;
+                let _ = sqlx::query("UPDATE queue SET status = 'cancelled', progress = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    .bind(queue_id)
+                    .execute(&state.db)
+                    .await;
+                record_history(&state.db, queue_id, "cancelled", None).await;
+                let _ = tx.send(ProgressUpdate {
+                    queue_id,
+                    progress: String::new(),
+                    status: "cancelled".to_string(),
+                    output: None,
+                });
                 return;
             }
         }

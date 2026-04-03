@@ -1,7 +1,7 @@
 export interface QueueEntry {
   id: number;
   url: string;
-  status: "pending" | "downloading" | "completed" | "failed";
+  status: "pending" | "downloading" | "completed" | "failed" | "cancelled";
   progress: string | null;
   error: string | null;
   output: string | null;

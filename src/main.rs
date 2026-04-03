@@ -1,7 +1,8 @@
 use clap::Parser;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub config: Arc<config::Config>,
     pub progress_tx: broadcast::Sender<worker::ProgressUpdate>,
+    /// Per-download cancellation tokens, keyed by queue_id
+    pub download_tokens: Arc<Mutex<HashMap<i64, CancellationToken>>>,
 }
 
 #[tokio::main]
@@ -63,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db: pool,
         config: Arc::new(config),
         progress_tx: progress_tx.clone(),
+        download_tokens: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Spawn download worker with cancellation token

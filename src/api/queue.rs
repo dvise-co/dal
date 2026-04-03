@@ -207,28 +207,90 @@ async fn cancel(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let result = sqlx::query("DELETE FROM queue WHERE id = ? AND status = 'pending'")
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Database error: {}", e),
-                }),
-            )
-        })?;
+    // Check current status
+    let entry: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM queue WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Database error: {}", e),
+                    }),
+                )
+            })?;
 
-    if result.rows_affected() == 0 {
-        Err((
-            StatusCode::NOT_FOUND,
+    let (status,) = entry.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Queue entry not found".to_string(),
+        }),
+    ))?;
+
+    match status.as_str() {
+        "pending" => {
+            // Delete child rows first to avoid FK constraint errors
+            sqlx::query("DELETE FROM queue_history WHERE queue_id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            sqlx::query("DELETE FROM files WHERE queue_id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            sqlx::query("DELETE FROM queue WHERE id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        "downloading" => {
+            // Cancel the active download via its cancellation token
+            let token = state.download_tokens.lock().await.get(&id).cloned();
+            if let Some(token) = token {
+                token.cancel();
+                Ok(StatusCode::NO_CONTENT)
+            } else {
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                        error: "Download is in progress but no cancellation token found".to_string(),
+                    }),
+                ))
+            }
+        }
+        _ => Err((
+            StatusCode::CONFLICT,
             Json(ErrorResponse {
-                error: "Queue entry not found or not in pending state".to_string(),
+                error: format!("Cannot cancel entry with status '{}'", status),
             }),
-        ))
-    } else {
-        Ok(StatusCode::NO_CONTENT)
+        )),
     }
 }
 
@@ -367,7 +429,7 @@ async fn archive_all(
             status.replace('\'', "")
         )
     } else {
-        "UPDATE queue SET archived = TRUE WHERE status IN ('completed', 'failed') AND (archived = FALSE OR archived IS NULL)".to_string()
+        "UPDATE queue SET archived = TRUE WHERE status IN ('completed', 'failed', 'cancelled') AND (archived = FALSE OR archived IS NULL)".to_string()
     };
     sqlx::query(&query).execute(&state.db).await.map_err(|e| {
         (
@@ -393,7 +455,7 @@ async fn retry(
     .await;
 
     let result = sqlx::query(
-        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed')",
+        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed', 'cancelled')",
     )
     .bind(id)
     .execute(&state.db)
