@@ -41,9 +41,11 @@ default_args = [
   "--trim-filenames", "150"
 ]
 
-# Custom output template (overrides default yt-dlp naming)
-# If not set, yt-dlp uses: %(title)s.%(ext)s
-# output_template = "%(uploader)s/%(title)s.%(ext)s"
+# Custom output template (overrides default naming)
+# If not set, defaults to: %(title)s [%(id)s].%(ext)s
+# The video ID is included by default to prevent filename collisions
+# between different URLs that happen to share the same title.
+# output_template = "%(uploader)s/%(title)s [%(id)s].%(ext)s"
 
 # Additional arguments appended after default_args.
 # Use this for format selection, cookies, rate limiting, etc.

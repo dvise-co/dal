@@ -146,9 +146,12 @@ async fn download_item(
 
     let ytdlp = &state.config.ytdlp;
 
+    // When no custom template is configured, use yt-dlp's default which
+    // includes the video ID to avoid collisions between different URLs that
+    // happen to share the same title.
     let output_template = match &ytdlp.output_template {
         Some(tpl) => format!("{}/{}", base.display(), tpl),
-        None => format!("{}/%(title)s.%(ext)s", base.display()),
+        None => format!("{}/%(title)s [%(id)s].%(ext)s", base.display()),
     };
 
     let mut cmd = tokio::process::Command::new(&ytdlp.binary);
