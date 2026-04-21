@@ -13,8 +13,6 @@ download_dir = "/downloads"
 # Docker: persists in .docker/data/
 # Direct: set to your preferred location (e.g. ~/.dal/dal.db)
 database = "/data/dal.db"
-# Organize downloads into subdirectories by source hostname
-segment_by_host = true
 # Optional: rewrite displayed file paths (useful when download_dir is a Docker
 # volume mount and you want the UI to show the host path instead)
 # display_path_prefix = "/mnt/media"

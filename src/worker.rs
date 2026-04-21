@@ -133,14 +133,10 @@ async fn download_item(
         None
     };
 
-    // Build output path: [download_dir]/[category]/[host]/%(title)s.%(ext)s
+    // Build output path: [download_dir]/[category]/%(title)s.%(ext)s
     let mut base = std::path::PathBuf::from(download_dir);
     if let Some(ref cat) = category_name {
         base.push(cat);
-    }
-    if state.config.storage.segment_by_host {
-        let host = parse_host(url).unwrap_or_else(|| "unknown".to_string());
-        base.push(&host);
     }
     let _ = std::fs::create_dir_all(&base);
 
@@ -533,7 +529,7 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
-fn parse_host(url: &str) -> Option<String> {
+pub fn parse_host(url: &str) -> Option<String> {
     url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|h| h.to_string()))

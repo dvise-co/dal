@@ -42,6 +42,7 @@ struct QueueEntry {
     position: Option<i64>,
     archived: Option<bool>,
     attempts: Option<i64>,
+    host: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -101,7 +102,7 @@ async fn create(
     if !body.force {
         // Check if URL exists in the queue
         let existing: Option<QueueEntry> = sqlx::query_as(
-            "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
+            "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, host, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
         )
         .bind(&body.url)
         .fetch_optional(&state.db)
@@ -171,12 +172,15 @@ async fn create(
         .unwrap_or(None);
     let next_pos = max_pos.unwrap_or(-1) + 1;
 
+    let host = crate::worker::parse_host(&body.url);
+
     let entry: QueueEntry = sqlx::query_as(
-        "INSERT INTO queue (url, category_id, position) VALUES (?, ?, ?) RETURNING id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at"
+        "INSERT INTO queue (url, category_id, position, host) VALUES (?, ?, ?, ?) RETURNING id, url, status, progress, error, output, category_id, position, archived, attempts, host, created_at, updated_at"
     )
     .bind(&body.url)
     .bind(category_id)
     .bind(next_pos)
+    .bind(&host)
     .fetch_one(&state.db)
     .await
     .map_err(|e| (
@@ -192,7 +196,7 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<QueueEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
-        "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, created_at, updated_at FROM queue",
+        "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, host, created_at, updated_at FROM queue",
     );
     let mut conditions: Vec<String> = Vec::new();
 

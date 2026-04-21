@@ -9,6 +9,7 @@ export interface QueueEntry {
   position: number | null;
   archived: boolean | null;
   attempts: number | null;
+  host: string | null;
   created_at: string;
   updated_at: string;
 }
