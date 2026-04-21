@@ -73,7 +73,6 @@ port = 8550
 [storage]
 download_dir = "/downloads"
 database = "/data/dal.db"
-segment_by_host = true
 # Optional: rewrite displayed file paths (useful for Docker volume mounts)
 # display_path_prefix = "/mnt/media"
 
@@ -97,7 +96,6 @@ extra_args = []
 | `server` | `port` | `8550` | API server port |
 | `storage` | `download_dir` | `./downloads` | Where files are saved |
 | `storage` | `database` | `./dal.db` | SQLite database path |
-| `storage` | `segment_by_host` | `true` | Create subdirectories per source hostname |
 | `storage` | `display_path_prefix` | *(none)* | Rewrite displayed paths with this prefix instead of `download_dir` |
 | `ytdlp` | `binary` | `yt-dlp` | Path to yt-dlp binary |
 | `ytdlp` | `max_concurrent` | `1` | Max simultaneous downloads |
@@ -157,22 +155,15 @@ DAL_API_URL=http://localhost:8550
 
 ## File Organization
 
-### Host Segmentation
-
-With `segment_by_host = true` (default), downloads are organized by source:
+Downloads are organized by category, with a flat directory per category. The source hostname is recorded on the queue entry (`queue.host`) rather than in the filesystem layout.
 
 ```
 /mnt/media/videos/
-├── youtube.com/
-│   ├── 85 - Great Video.mp4
-│   └── Tutorial.mp4
-├── vimeo.com/
-│   └── 72 - Art Film.mp4
-└── reddit.com/
-    └── INCOMPLETE - Funny Clip.mp4
+├── 85 - Great Video.mp4
+├── Tutorial.mp4
+├── 72 - Art Film.mp4
+└── INCOMPLETE - Funny Clip.mp4
 ```
-
-Set `segment_by_host = false` for a flat directory.
 
 ### File Naming Convention
 
