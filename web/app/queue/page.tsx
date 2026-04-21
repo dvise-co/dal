@@ -480,6 +480,15 @@ export default function QueuePage() {
                     </Badge>
                   )}
 
+                  {entry.host && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 text-muted-foreground"
+                    >
+                      {entry.host.replace(/^www\./, "")}
+                    </Badge>
+                  )}
+
                   <span
                     className="flex-1 min-w-0 font-mono truncate text-muted-foreground"
                     title={entry.url}
