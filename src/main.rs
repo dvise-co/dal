@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -20,11 +21,15 @@ struct Cli {
     config: PathBuf,
 }
 
+/// Per-download cancellation tokens, keyed by queue ID.
+pub type ActiveDownloads = Arc<tokio::sync::Mutex<HashMap<i64, CancellationToken>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub config: Arc<config::Config>,
     pub progress_tx: broadcast::Sender<worker::ProgressUpdate>,
+    pub active_downloads: ActiveDownloads,
 }
 
 #[tokio::main]
@@ -66,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db: pool,
         config: Arc::new(config),
         progress_tx: progress_tx.clone(),
+        active_downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     // Spawn download worker with cancellation token

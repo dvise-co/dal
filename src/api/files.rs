@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
 struct FileEntry {
     id: i64,
     queue_id: Option<i64>,
+    url: Option<String>,
     filename: String,
     original: String,
     path: String,
@@ -66,7 +67,7 @@ async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<FileResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let mut query = String::from(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files",
+        "SELECT id, queue_id, url, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files",
     );
     let mut conditions: Vec<String> = Vec::new();
 
@@ -138,7 +139,7 @@ async fn rate(
 
     // Get current file record
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?"
+        "SELECT id, queue_id, url, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -173,7 +174,7 @@ async fn rate(
 
     // Update database
     let updated: FileEntry = sqlx::query_as(
-        "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
+        "UPDATE files SET filename = ?, path = ?, rating = ?, rated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, queue_id, url, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
     )
     .bind(&new_filename)
     .bind(&new_relative)
@@ -195,7 +196,7 @@ async fn remove(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // Get file record
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?"
+        "SELECT id, queue_id, url, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -236,7 +237,7 @@ async fn requeue(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let file: FileEntry = sqlx::query_as(
-        "SELECT id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?",
+        "SELECT id, queue_id, url, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at FROM files WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -348,7 +349,7 @@ async fn scan(
         let rating = crate::rename::parse_rating(&filename).map(|r| r as i32);
 
         let entry: FileEntry = sqlx::query_as(
-            "INSERT INTO files (filename, original, path, size_bytes, rating) VALUES (?, ?, ?, ?, ?) RETURNING id, queue_id, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
+            "INSERT INTO files (filename, original, path, size_bytes, rating) VALUES (?, ?, ?, ?, ?) RETURNING id, queue_id, url, filename, original, path, rating, size_bytes, duration, thumbnail, category_id, provisional, created_at, rated_at"
         )
         .bind(&filename)
         .bind(&filename)

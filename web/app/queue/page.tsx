@@ -30,6 +30,7 @@ type StatusFilter =
   | "downloading"
   | "completed"
   | "failed"
+  | "cancelled"
   | "archived";
 
 const STATUS_VARIANTS: Record<
@@ -40,6 +41,7 @@ const STATUS_VARIANTS: Record<
   downloading: "default",
   completed: "secondary",
   failed: "destructive",
+  cancelled: "destructive",
 };
 
 export default function QueuePage() {
@@ -324,6 +326,7 @@ export default function QueuePage() {
               "downloading",
               "completed",
               "failed",
+              "cancelled",
               "archived",
             ] as StatusFilter[]
           ).map((s) => (
@@ -477,6 +480,15 @@ export default function QueuePage() {
                     </Badge>
                   )}
 
+                  {entry.host && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 text-muted-foreground"
+                    >
+                      {entry.host.replace(/^www\./, "")}
+                    </Badge>
+                  )}
+
                   <span
                     className="flex-1 min-w-0 font-mono truncate text-muted-foreground"
                     title={entry.url}
@@ -510,7 +522,8 @@ export default function QueuePage() {
                           Next
                         </Button>
                       )}
-                    {entry.status === "pending" && (
+                    {(entry.status === "pending" ||
+                      entry.status === "downloading") && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -520,7 +533,8 @@ export default function QueuePage() {
                         Cancel
                       </Button>
                     )}
-                    {entry.status === "failed" && (
+                    {(entry.status === "failed" ||
+                      entry.status === "cancelled") && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -531,7 +545,8 @@ export default function QueuePage() {
                       </Button>
                     )}
                     {(entry.status === "completed" ||
-                      entry.status === "failed") &&
+                      entry.status === "failed" ||
+                      entry.status === "cancelled") &&
                       !entry.archived && (
                         <Button
                           variant="ghost"

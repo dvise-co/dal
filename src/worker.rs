@@ -31,15 +31,27 @@ pub fn spawn_worker(
                 return;
             }
 
-            let pending: Vec<(i64, String, Option<i64>)> = match sqlx::query_as(
-                "SELECT id, url, category_id FROM queue WHERE status = 'pending' ORDER BY position ASC, created_at ASC LIMIT 5"
+            // Acquire a permit before querying so we always fetch the latest ordering.
+            // This fixes "move to next" being ignored when the worker had already
+            // pre-fetched a stale batch of pending items.
+            let permit = tokio::select! {
+                p = semaphore.clone().acquire_owned() => match p {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                },
+                _ = cancel.cancelled() => return,
+            };
+
+            let next: Option<(i64, String, Option<i64>)> = match sqlx::query_as(
+                "SELECT id, url, category_id FROM queue WHERE status = 'pending' AND (archived = FALSE OR archived IS NULL) ORDER BY position ASC, created_at ASC LIMIT 1"
             )
-            .fetch_all(&state.db)
+            .fetch_optional(&state.db)
             .await
             {
-                Ok(rows) => rows,
+                Ok(row) => row,
                 Err(e) => {
                     tracing::error!("Failed to poll queue: {}", e);
+                    drop(permit);
                     tokio::select! {
                         _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
                         _ = cancel.cancelled() => return
@@ -48,29 +60,24 @@ pub fn spawn_worker(
                 }
             };
 
-            if pending.is_empty() {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
-                    _ = cancel.cancelled() => return
+            match next {
+                Some((id, url, category_id)) => {
+                    let state = state.clone();
+                    let cancel = cancel.clone();
+                    let tx = progress_tx.clone();
+
+                    tokio::spawn(async move {
+                        download_item(&state, id, &url, category_id, cancel, &tx).await;
+                        drop(permit);
+                    });
                 }
-                continue;
-            }
-
-            for (id, url, category_id) in pending {
-                let permit = semaphore.clone().acquire_owned().await.unwrap();
-                let state = state.clone();
-                let cancel = cancel.clone();
-                let tx = progress_tx.clone();
-
-                tokio::spawn(async move {
-                    download_item(&state, id, &url, category_id, cancel, &tx).await;
+                None => {
                     drop(permit);
-                });
-            }
-
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
-                _ = cancel.cancelled() => return
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                        _ = cancel.cancelled() => return
+                    }
+                }
             }
         }
     })
@@ -86,6 +93,13 @@ async fn download_item(
 ) {
     tracing::info!("Starting download for queue {} url={}", queue_id, url);
 
+    // Create a per-download cancellation token as a child of the global one
+    let item_cancel = cancel.child_token();
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        downloads.insert(queue_id, item_cancel.clone());
+    }
+
     // Mark as downloading and increment attempts
     if let Err(e) = sqlx::query(
         "UPDATE queue SET status = 'downloading', attempts = COALESCE(attempts, 0) + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -95,6 +109,7 @@ async fn download_item(
     .await
     {
         tracing::error!("Failed to update queue status for {}: {}", queue_id, e);
+        state.active_downloads.lock().await.remove(&queue_id);
         return;
     }
 
@@ -127,9 +142,12 @@ async fn download_item(
 
     let ytdlp = &state.config.ytdlp;
 
+    // When no custom template is configured, use yt-dlp's default which
+    // includes the video ID to avoid collisions between different URLs that
+    // happen to share the same title.
     let output_template = match &ytdlp.output_template {
         Some(tpl) => format!("{}/{}", base.display(), tpl),
-        None => format!("{}/%(title)s.%(ext)s", base.display()),
+        None => format!("{}/%(title)s [%(id)s].%(ext)s", base.display()),
     };
 
     let mut cmd = tokio::process::Command::new(&ytdlp.binary);
@@ -168,6 +186,7 @@ async fn download_item(
         }
         Err(e) => {
             tracing::error!("Failed to spawn yt-dlp for queue {}: {}", queue_id, e);
+            state.active_downloads.lock().await.remove(&queue_id);
             let _ = sqlx::query("UPDATE queue SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                 .bind(format!("Failed to spawn yt-dlp: {}", e))
                 .bind(queue_id)
@@ -287,9 +306,17 @@ async fn download_item(
                     }
                 }
             }
-            _ = cancel.cancelled() => {
-                tracing::info!("Killing yt-dlp for queue {} due to shutdown", queue_id);
+            _ = item_cancel.cancelled() => {
+                tracing::info!("Killing yt-dlp for queue {} due to cancellation", queue_id);
                 let _ = child.kill().await;
+                state.active_downloads.lock().await.remove(&queue_id);
+                let _ = sqlx::query(
+                    "UPDATE queue SET status = 'cancelled', error = 'Cancelled by user', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                )
+                .bind(queue_id)
+                .execute(&state.db)
+                .await;
+                record_history(&state.db, queue_id, "cancelled", Some("Cancelled by user")).await;
                 return;
             }
         }
@@ -342,10 +369,13 @@ async fn download_item(
         None
     };
 
+    // Unregister per-download cancellation token
+    state.active_downloads.lock().await.remove(&queue_id);
+
     match status {
         Ok(exit) if exit.success() => {
             record_history(&state.db, queue_id, "completed", None).await;
-            handle_success(state, queue_id, category_id, final_filepath, false).await;
+            handle_success(state, queue_id, url, category_id, final_filepath, false).await;
         }
         _ if is_provisional => {
             tracing::warn!(
@@ -354,11 +384,19 @@ async fn download_item(
                 provisional_reason.unwrap_or("unknown")
             );
             record_history(&state.db, queue_id, "completed", provisional_reason).await;
-            handle_success(state, queue_id, category_id, final_filepath, true).await;
+            handle_success(state, queue_id, url, category_id, final_filepath, true).await;
         }
         Ok(_) | Err(_) => {
             record_history(&state.db, queue_id, "failed", None).await;
-            handle_failure(state, queue_id, category_id, final_filepath, download_dir).await;
+            handle_failure(
+                state,
+                queue_id,
+                url,
+                category_id,
+                final_filepath,
+                download_dir,
+            )
+            .await;
         }
     }
 }
@@ -375,6 +413,7 @@ async fn record_history(db: &sqlx::SqlitePool, queue_id: i64, status: &str, erro
 async fn handle_success(
     state: &AppState,
     queue_id: i64,
+    url: &str,
     category_id: Option<i64>,
     final_filepath: Option<String>,
     provisional: bool,
@@ -390,9 +429,10 @@ async fn handle_success(
         let relative = state.config.storage.to_relative_path(filepath);
 
         let _ = sqlx::query(
-            "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id, provisional) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO files (queue_id, url, filename, original, path, size_bytes, category_id, provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(queue_id)
+        .bind(url)
         .bind(&filename)
         .bind(&filename)
         .bind(&relative)
@@ -414,6 +454,7 @@ async fn handle_success(
 async fn handle_failure(
     state: &AppState,
     queue_id: i64,
+    url: &str,
     category_id: Option<i64>,
     final_filepath: Option<String>,
     download_dir: &str,
@@ -438,9 +479,10 @@ async fn handle_failure(
                 .storage
                 .to_relative_path(&incomplete_path.to_string_lossy());
             let _ = sqlx::query(
-                "INSERT INTO files (queue_id, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO files (queue_id, url, filename, original, path, size_bytes, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(queue_id)
+            .bind(url)
             .bind(&incomplete_name)
             .bind(&filename)
             .bind(&relative)

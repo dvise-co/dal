@@ -100,6 +100,7 @@ async fn create(
 
     // Check for duplicate URL unless force is set
     if !body.force {
+        // Check if URL exists in the queue
         let existing: Option<QueueEntry> = sqlx::query_as(
             "SELECT id, url, status, progress, error, output, category_id, position, archived, attempts, host, created_at, updated_at FROM queue WHERE url = ? LIMIT 1"
         )
@@ -118,6 +119,31 @@ async fn create(
                     error: format!(
                         "URL already queued (id: {}, status: {}). Send with \"force\": true to re-download.",
                         prev.id, prev.status
+                    ),
+                }),
+            ));
+        }
+
+        // Check if URL was already downloaded (check files.url directly, or fall back to queue join for legacy records)
+        let existing_file: Option<(i64, String)> = sqlx::query_as(
+            "SELECT id, filename FROM files WHERE url = ? UNION SELECT f.id, f.filename FROM files f JOIN queue q ON f.queue_id = q.id WHERE q.url = ? AND f.url IS NULL LIMIT 1"
+        )
+        .bind(&body.url)
+        .bind(&body.url)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Database error: {}", e) }),
+        ))?;
+
+        if let Some((file_id, filename)) = existing_file {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "URL already downloaded as \"{}\" (file id: {}). Send with \"force\": true to re-download.",
+                        filename, file_id
                     ),
                 }),
             ));
@@ -211,9 +237,10 @@ async fn cancel(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let result = sqlx::query("DELETE FROM queue WHERE id = ? AND status = 'pending'")
+    // Check current status
+    let entry: Option<(String,)> = sqlx::query_as("SELECT status FROM queue WHERE id = ?")
         .bind(id)
-        .execute(&state.db)
+        .fetch_optional(&state.db)
         .await
         .map_err(|e| {
             (
@@ -224,15 +251,76 @@ async fn cancel(
             )
         })?;
 
-    if result.rows_affected() == 0 {
-        Err((
-            StatusCode::NOT_FOUND,
+    let (status,) = entry.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Queue entry not found".to_string(),
+        }),
+    ))?;
+
+    match status.as_str() {
+        "pending" => {
+            // Delete child rows first to avoid FK constraint errors
+            sqlx::query("DELETE FROM queue_history WHERE queue_id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            sqlx::query("DELETE FROM files WHERE queue_id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            sqlx::query("DELETE FROM queue WHERE id = ?")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Database error: {}", e),
+                        }),
+                    )
+                })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        "downloading" => {
+            // Signal the worker to kill yt-dlp for this download
+            let token = state.active_downloads.lock().await.get(&id).cloned();
+            if let Some(token) = token {
+                token.cancel();
+            } else {
+                // Token not found — worker may have just finished; update status directly
+                let _ = sqlx::query(
+                    "UPDATE queue SET status = 'cancelled', error = 'Cancelled by user', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                )
+                .bind(id)
+                .execute(&state.db)
+                .await;
+            }
+            Ok(StatusCode::NO_CONTENT)
+        }
+        _ => Err((
+            StatusCode::CONFLICT,
             Json(ErrorResponse {
-                error: "Queue entry not found or not in pending state".to_string(),
+                error: format!("Cannot cancel entry in '{}' state", status),
             }),
-        ))
-    } else {
-        Ok(StatusCode::NO_CONTENT)
+        )),
     }
 }
 
@@ -371,7 +459,7 @@ async fn archive_all(
             status.replace('\'', "")
         )
     } else {
-        "UPDATE queue SET archived = TRUE WHERE status IN ('completed', 'failed') AND (archived = FALSE OR archived IS NULL)".to_string()
+        "UPDATE queue SET archived = TRUE WHERE status IN ('completed', 'failed', 'cancelled') AND (archived = FALSE OR archived IS NULL)".to_string()
     };
     sqlx::query(&query).execute(&state.db).await.map_err(|e| {
         (
@@ -397,7 +485,7 @@ async fn retry(
     .await;
 
     let result = sqlx::query(
-        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed')",
+        "UPDATE queue SET status = 'pending', progress = NULL, error = NULL, output = NULL, archived = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('failed', 'completed', 'cancelled')",
     )
     .bind(id)
     .execute(&state.db)

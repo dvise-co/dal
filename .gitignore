@@ -1,0 +1,33 @@
+# Rust
+target/
+*.db
+*.db-wal
+*.db-shm
+
+# Next.js
+web/node_modules/
+web/.next/
+web/out/
+
+# Config & local data
+dal.toml
+.docker/
+docker-compose.override.yml
+
+# Environment
+.env
+.env.local
+web/.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Flow temp files
+.tmp-flow/

@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS categories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE queue ADD COLUMN category_id INTEGER REFERENCES categories(id);
+ALTER TABLE files ADD COLUMN category_id INTEGER REFERENCES categories(id);
